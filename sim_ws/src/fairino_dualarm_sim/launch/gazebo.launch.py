@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import ExecuteProcess, TimerAction
 from launch.substitutions import Command, PathJoinSubstitution
 from launch.substitutions import FindExecutable
 from launch_ros.parameter_descriptions import ParameterValue
@@ -24,6 +24,12 @@ def generate_launch_description():
             cmd=[FindExecutable(name='gazebo'), '--verbose',
                  '-s', 'libgazebo_ros_factory.so'],
             output='screen'),
-        Node(package='gazebo_ros', executable='spawn_entity.py',
-             arguments=['-topic', 'robot_description', '-entity', 'fr3_bolt_cell'], output='screen'),
+        # Wait for Gazebo's factory service and robot_state_publisher's
+        # robot_description topic before inserting the model.
+        TimerAction(period=5.0, actions=[
+            Node(package='gazebo_ros', executable='spawn_entity.py',
+                 arguments=['-topic', 'robot_description',
+                            '-entity', 'fr3_bolt_cell', '-timeout', '30'],
+                 output='screen')
+        ]),
     ])
