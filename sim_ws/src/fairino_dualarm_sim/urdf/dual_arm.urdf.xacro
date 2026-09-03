@@ -1,0 +1,87 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fairino_dualarm_sim">
+  <material name="blue"><color rgba="0.10 0.35 0.85 1"/></material>
+  <material name="orange"><color rgba="0.90 0.35 0.08 1"/></material>
+  <material name="dark"><color rgba="0.12 0.12 0.14 1"/></material>
+  <material name="green"><color rgba="0.10 0.85 0.25 1"/></material>
+  <material name="aluminum"><color rgba="0.62 0.66 0.70 1"/></material>
+  <material name="bolt"><color rgba="0.70 0.72 0.76 1"/></material>
+
+  <link name="world"/>
+  <link name="table"><visual><geometry><box size="1.4 1.2 0.08"/></geometry><material name="dark"/></visual><collision><geometry><box size="1.4 1.2 0.08"/></geometry></collision></link>
+  <joint name="world_table" type="fixed"><parent link="world"/><child link="table"/><origin xyz="0 0 0.79"/></joint>
+
+  <xacro:macro name="arm" params="prefix x mat">
+    <link name="${prefix}base_link"><visual><geometry><cylinder radius="0.13" length="0.18"/></geometry><material name="${mat}"/></visual><collision><geometry><cylinder radius="0.13" length="0.18"/></geometry></collision></link>
+    <joint name="${prefix}base_joint" type="fixed"><parent link="world"/><child link="${prefix}base_link"/><origin xyz="${x} 0 0.91"/></joint>
+    <link name="${prefix}link1"><visual><geometry><cylinder radius="0.055" length="0.34"/></geometry><material name="${mat}"/></visual><collision><geometry><cylinder radius="0.055" length="0.34"/></geometry></collision></link>
+    <joint name="${prefix}joint1" type="revolute"><parent link="${prefix}base_link"/><child link="${prefix}link1"/><origin xyz="0 0 0.23" rpy="0 0 0"/><axis xyz="0 0 1"/><limit lower="-3.14" upper="3.14" effort="50" velocity="2"/></joint>
+    <link name="${prefix}link2"><visual><geometry><box size="0.10 0.42 0.10"/></geometry><material name="${mat}"/></visual><collision><geometry><box size="0.10 0.42 0.10"/></geometry></collision></link>
+    <joint name="${prefix}joint2" type="revolute"><parent link="${prefix}link1"/><child link="${prefix}link2"/><origin xyz="0 0 0.34"/><axis xyz="0 1 0"/><limit lower="-2.5" upper="2.5" effort="50" velocity="2"/></joint>
+    <link name="${prefix}link3"><visual><geometry><box size="0.09 0.36 0.09"/></geometry><material name="${mat}"/></visual><collision><geometry><box size="0.09 0.36 0.09"/></geometry></collision></link>
+    <joint name="${prefix}joint3" type="revolute"><parent link="${prefix}link2"/><child link="${prefix}link3"/><origin xyz="0 0 -0.42"/><axis xyz="0 1 0"/><limit lower="-2.5" upper="2.5" effort="50" velocity="2"/></joint>
+    <link name="${prefix}link4"><visual><geometry><cylinder radius="0.045" length="0.18"/></geometry><material name="${mat}"/></visual><collision><geometry><cylinder radius="0.045" length="0.18"/></geometry></collision></link>
+    <joint name="${prefix}joint4" type="revolute"><parent link="${prefix}link3"/><child link="${prefix}link4"/><origin xyz="0 0 -0.36"/><axis xyz="1 0 0"/><limit lower="-3.14" upper="3.14" effort="30" velocity="2"/></joint>
+    <link name="${prefix}link5"><visual><geometry><cylinder radius="0.04" length="0.14"/></geometry><material name="${mat}"/></visual><collision><geometry><cylinder radius="0.04" length="0.14"/></geometry></collision></link>
+    <joint name="${prefix}joint5" type="revolute"><parent link="${prefix}link4"/><child link="${prefix}link5"/><origin xyz="0 0 -0.18"/><axis xyz="0 1 0"/><limit lower="-2.5" upper="2.5" effort="30" velocity="2"/></joint>
+    <link name="${prefix}tool"><visual><geometry><box size="0.12 0.12 0.12"/></geometry><material name="dark"/></visual><collision><geometry><box size="0.12 0.12 0.12"/></geometry></collision></link>
+    <joint name="${prefix}joint6" type="revolute"><parent link="${prefix}link5"/><child link="${prefix}tool"/><origin xyz="0 0 -0.14"/><axis xyz="1 0 0"/><limit lower="-3.14" upper="3.14" effort="20" velocity="2"/></joint>
+  </xacro:macro>
+  <xacro:arm prefix="left_" x="-0.48" mat="blue"/>
+  <xacro:arm prefix="right_" x="0.48" mat="orange"/>
+
+  <!-- Side-mounted end-effector mock-up: aluminum extrusion, rotated flange,
+       parallel jaws, and a head-mounted depth camera. -->
+  <link name="left_aluminum_bar">
+    <visual><origin xyz="0 0 -0.20"/><geometry><box size="0.08 0.08 0.40"/></geometry><material name="aluminum"/></visual>
+    <collision><origin xyz="0 0 -0.20"/><geometry><box size="0.08 0.08 0.40"/></geometry></collision>
+  </link>
+  <joint name="left_aluminum_bar_joint" type="fixed"><parent link="left_tool"/><child link="left_aluminum_bar"/><origin xyz="0 0 -0.20"/></joint>
+  <link name="left_side_flange">
+    <visual><geometry><cylinder radius="0.055" length="0.018"/></geometry><material name="dark"/></visual>
+    <collision><geometry><cylinder radius="0.055" length="0.018"/></geometry></collision>
+  </link>
+  <joint name="left_side_flange_joint" type="fixed"><parent link="left_aluminum_bar"/><child link="left_side_flange"/><origin xyz="0 0 -0.40" rpy="0 1.5708 0"/></joint>
+  <link name="left_gripper_base">
+    <visual><origin xyz="0 0 0.045"/><geometry><box size="0.11 0.08 0.09"/></geometry><material name="dark"/></visual>
+    <collision><origin xyz="0 0 0.045"/><geometry><box size="0.11 0.08 0.09"/></geometry></collision>
+  </link>
+  <joint name="left_gripper_mount" type="fixed"><parent link="left_side_flange"/><child link="left_gripper_base"/><origin xyz="0 0 0.06" rpy="0 0 0"/></joint>
+  <link name="left_finger_a"><visual><origin xyz="0 0 0.035"/><geometry><box size="0.018 0.035 0.07"/></geometry><material name="aluminum"/></visual><collision><origin xyz="0 0 0.035"/><geometry><box size="0.018 0.035 0.07"/></geometry></collision></link>
+  <joint name="left_finger_a_joint" type="prismatic"><parent link="left_gripper_base"/><child link="left_finger_a"/><origin xyz="0 0.035 0.09"/><axis xyz="0 1 0"/><limit lower="0" upper="0.025" effort="30" velocity="0.05"/></joint>
+  <link name="left_finger_b"><visual><origin xyz="0 0 0.035"/><geometry><box size="0.018 0.035 0.07"/></geometry><material name="aluminum"/></visual><collision><origin xyz="0 0 0.035"/><geometry><box size="0.018 0.035 0.07"/></geometry></collision></link>
+  <joint name="left_finger_b_joint" type="prismatic"><parent link="left_gripper_base"/><child link="left_finger_b"/><origin xyz="0 -0.035 0.09"/><axis xyz="0 1 0"/><limit lower="-0.025" upper="0" effort="30" velocity="0.05"/></joint>
+
+  <link name="head_camera_link">
+    <visual><geometry><box size="0.07 0.05 0.05"/></geometry><material name="green"/></visual>
+    <collision><geometry><box size="0.07 0.05 0.05"/></geometry></collision>
+  </link>
+  <joint name="head_camera_mount" type="fixed"><parent link="left_aluminum_bar"/><child link="head_camera_link"/><origin xyz="0 0 -0.39" rpy="0 -0.45 -1.5708"/></joint>
+  <link name="head_camera_optical_frame"/>
+  <joint name="head_camera_optical_joint" type="fixed"><parent link="head_camera_link"/><child link="head_camera_optical_frame"/><origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/></joint>
+  <gazebo reference="head_camera_link">
+    <sensor name="head_depth_sensor" type="depth">
+      <always_on>true</always_on><update_rate>15</update_rate><visualize>true</visualize>
+      <camera><horizontal_fov>1.047</horizontal_fov><image><width>640</width><height>480</height><format>R8G8B8</format></image><clip><near>0.08</near><far>3.0</far></clip></camera>
+      <plugin name="head_depth_camera_plugin" filename="libgazebo_ros_depth_camera.so">
+        <cameraName>head_depth</cameraName><frameName>head_camera_optical_frame</frameName>
+        <imageTopicName>image_raw</imageTopicName><depthImageTopicName>depth/image_raw</depthImageTopicName>
+        <pointCloudTopicName>points</pointCloudTopicName><cameraInfoTopicName>camera_info</cameraInfoTopicName>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <!-- 5 x 8 orderly bolts, each 25 mm long and 6 mm diameter. -->
+  <xacro:macro name="bolt" params="name x y">
+    <link name="${name}"><visual><origin xyz="0 0 0.0125"/><geometry><cylinder radius="0.003" length="0.025"/></geometry><material name="bolt"/></visual><collision><origin xyz="0 0 0.0125"/><geometry><cylinder radius="0.003" length="0.025"/></geometry></collision></link>
+    <joint name="${name}_joint" type="fixed"><parent link="world"/><child link="${name}"/><origin xyz="${x} ${y} 0.83"/></joint>
+  </xacro:macro>
+  <xacro:bolt name="bolt_01" x="0.18" y="-0.28"/><xacro:bolt name="bolt_02" x="0.18" y="-0.20"/><xacro:bolt name="bolt_03" x="0.18" y="-0.12"/><xacro:bolt name="bolt_04" x="0.18" y="-0.04"/><xacro:bolt name="bolt_05" x="0.18" y="0.04"/><xacro:bolt name="bolt_06" x="0.18" y="0.12"/><xacro:bolt name="bolt_07" x="0.18" y="0.20"/><xacro:bolt name="bolt_08" x="0.18" y="0.28"/>
+  <xacro:bolt name="bolt_09" x="0.26" y="-0.28"/><xacro:bolt name="bolt_10" x="0.26" y="-0.20"/><xacro:bolt name="bolt_11" x="0.26" y="-0.12"/><xacro:bolt name="bolt_12" x="0.26" y="-0.04"/><xacro:bolt name="bolt_13" x="0.26" y="0.04"/><xacro:bolt name="bolt_14" x="0.26" y="0.12"/><xacro:bolt name="bolt_15" x="0.26" y="0.20"/><xacro:bolt name="bolt_16" x="0.26" y="0.28"/>
+  <xacro:bolt name="bolt_17" x="0.34" y="-0.28"/><xacro:bolt name="bolt_18" x="0.34" y="-0.20"/><xacro:bolt name="bolt_19" x="0.34" y="-0.12"/><xacro:bolt name="bolt_20" x="0.34" y="-0.04"/><xacro:bolt name="bolt_21" x="0.34" y="0.04"/><xacro:bolt name="bolt_22" x="0.34" y="0.12"/><xacro:bolt name="bolt_23" x="0.34" y="0.20"/><xacro:bolt name="bolt_24" x="0.34" y="0.28"/>
+  <xacro:bolt name="bolt_25" x="0.42" y="-0.28"/><xacro:bolt name="bolt_26" x="0.42" y="-0.20"/><xacro:bolt name="bolt_27" x="0.42" y="-0.12"/><xacro:bolt name="bolt_28" x="0.42" y="-0.04"/><xacro:bolt name="bolt_29" x="0.42" y="0.04"/><xacro:bolt name="bolt_30" x="0.42" y="0.12"/><xacro:bolt name="bolt_31" x="0.42" y="0.20"/><xacro:bolt name="bolt_32" x="0.42" y="0.28"/>
+  <xacro:bolt name="bolt_33" x="0.50" y="-0.28"/><xacro:bolt name="bolt_34" x="0.50" y="-0.20"/><xacro:bolt name="bolt_35" x="0.50" y="-0.12"/><xacro:bolt name="bolt_36" x="0.50" y="-0.04"/><xacro:bolt name="bolt_37" x="0.50" y="0.04"/><xacro:bolt name="bolt_38" x="0.50" y="0.12"/><xacro:bolt name="bolt_39" x="0.50" y="0.20"/><xacro:bolt name="bolt_40" x="0.50" y="0.28"/>
+
+  <link name="object"><visual><geometry><cylinder radius="0.045" length="0.16"/></geometry><material name="green"/></visual><collision><geometry><cylinder radius="0.045" length="0.16"/></geometry></collision></link>
+  <joint name="object_fixed" type="fixed"><parent link="world"/><child link="object"/><origin xyz="0.42 0 0.91"/></joint>
+</robot>

@@ -1,0 +1,12 @@
+sim_controller:
+  ros__parameters:
+    publish_rate: 50.0
+    max_joint_speed: 1.2
+sim_vision:
+  ros__parameters:
+    object_frame: world
+    object_xyz: [0.42, 0.0, 0.83]
+grasp_demo:
+  ros__parameters:
+    object_xyz: [0.42, 0.0, 0.83]
+    place_xyz: [0.42, -0.42, 0.83]
