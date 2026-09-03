@@ -1,12 +1,18 @@
 from launch import LaunchDescription
 from launch.substitutions import Command, PathJoinSubstitution
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     pkg = FindPackageShare('fairino_dualarm_sim')
     urdf = PathJoinSubstitution([pkg, 'urdf', 'dual_arm.urdf.xacro'])
-    description = {'robot_description': Command(['xacro ', urdf])}
+    # xacro output is XML text, not YAML. Explicitly typing it as a string
+    # avoids ROS 2 launch trying to parse the URDF as a YAML parameter.
+    description = {
+        'robot_description': ParameterValue(
+            Command(['xacro ', urdf]), value_type=str)
+    }
     return LaunchDescription([
         Node(package='robot_state_publisher', executable='robot_state_publisher',
              parameters=[description], output='screen'),
