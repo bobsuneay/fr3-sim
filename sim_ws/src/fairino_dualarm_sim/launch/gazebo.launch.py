@@ -1,5 +1,7 @@
 from launch import LaunchDescription
+from launch.actions import ExecuteProcess
 from launch.substitutions import Command, PathJoinSubstitution
+from launch.substitutions import FindExecutable
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -16,8 +18,12 @@ def generate_launch_description():
     return LaunchDescription([
         Node(package='robot_state_publisher', executable='robot_state_publisher',
              parameters=[description], output='screen'),
-        Node(package='gazebo_ros', executable='gazebo',
-             arguments=['--verbose', '-s', 'libgazebo_ros_factory.so'], output='screen'),
+        # Gazebo Classic is a system executable, not an executable in the
+        # gazebo_ros libexec directory. gazebo_ros supplies the ROS plugins.
+        ExecuteProcess(
+            cmd=[FindExecutable(name='gazebo'), '--verbose',
+                 '-s', 'libgazebo_ros_factory.so'],
+            output='screen'),
         Node(package='gazebo_ros', executable='spawn_entity.py',
              arguments=['-topic', 'robot_description', '-entity', 'fr3_bolt_cell'], output='screen'),
     ])
