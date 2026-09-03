@@ -44,6 +44,7 @@ Ubuntu + ROS 2 Humble：
 
 ```bash
 sudo apt install -y ros-humble-gazebo-ros-pkgs ros-humble-gazebo-plugins
+sudo apt install -y python3-numpy
 cd sim_ws
 colcon build --symlink-install
 source install/setup.bash
