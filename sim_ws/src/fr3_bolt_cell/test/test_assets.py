@@ -3,6 +3,7 @@ import copy
 import ast
 import hashlib
 import math
+import shutil
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -221,6 +222,28 @@ def test_asset_hashes():
     }
     for name, expected in hashes.items():
         assert hashlib.sha256((ROOT/'meshes/fairino3_v6'/f'{name}.STL').read_bytes()).hexdigest().upper() == expected
+
+
+@pytest.mark.parametrize('layout', ['isolated', 'merged'])
+def test_gazebo_model_uris_resolve_in_install_tree(tmp_path, layout):
+    # Reproduce the missing model:// lookup with both colcon install layouts.
+    # RViz package:// lookup passing alone does not exercise Gazebo's search root.
+    prefix = tmp_path/'install'
+    if layout == 'isolated':
+        prefix = prefix/'fr3_bolt_cell'
+    share = prefix/'share/fr3_bolt_cell'
+    share.mkdir(parents=True)
+    shutil.copy2(ROOT/'package.xml', share/'package.xml')
+    shutil.copytree(ROOT/'meshes', share/'meshes')
+    manifest = ET.parse(share/'package.xml')
+    roots = [Path(export.get('gazebo_model_path').replace('${prefix}', str(share)))
+             for export in manifest.findall('./export/gazebo_ros')
+             if export.get('gazebo_model_path')]
+    urdf = ET.parse(ROOT/'urdf/fr3_arm.urdf')
+    for mesh in urdf.findall('.//mesh'):
+        uri = mesh.get('filename').replace('package://', 'model://', 1)
+        relative = uri.removeprefix('model://')
+        assert any((root/relative).is_file() for root in roots), uri
 
 
 def test_python_yaml_and_package_syntax():

@@ -37,5 +37,10 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <test_depend>python3-pytest</test_depend>
-  <export><build_type>ament_python</build_type></export>
+  <export>
+    <build_type>ament_python</build_type>
+    <!-- prefix is this package's installed share directory. Gazebo resolves
+         model://fr3_bolt_cell/... relative to its parent share directory. -->
+    <gazebo_ros gazebo_model_path="${prefix}/.."/>
+  </export>
 </package>

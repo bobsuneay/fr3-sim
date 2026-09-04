@@ -5,7 +5,8 @@ import tempfile
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription,
-                            LogInfo, OpaqueFunction, RegisterEventHandler)
+                            LogInfo, OpaqueFunction, RegisterEventHandler,
+                            SetEnvironmentVariable)
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.events import Shutdown
@@ -30,12 +31,22 @@ def start_cell(context):
     run_dir = tempfile.TemporaryDirectory(prefix='fr3_bolt_cell_')
     world_file = Path(run_dir.name)/'cell.world'
     world_file.write_text(world_xml(scene), encoding='utf-8')
-    urdf = xacro.process_file(str(share/'urdf/cell.urdf.xacro'), mappings={
+    urdf_document = xacro.process_file(str(share/'urdf/cell.urdf.xacro'), mappings={
         'arm_file': (share/'urdf/fr3_arm.urdf').as_posix(),
         'scene_file': scene_file.as_posix(),
         'initial_file': (share/'config/initial_positions.yaml').as_posix(),
         'controllers_file': (share/'config/controllers.yaml').as_posix(),
-    }).toxml()
+    })
+    mesh_prefix = 'package://fr3_bolt_cell/'
+    for mesh in urdf_document.getElementsByTagName('mesh'):
+        uri = mesh.getAttribute('filename')
+        if uri.startswith(mesh_prefix):
+            mesh_file = share / uri[len(mesh_prefix):]
+            if not mesh_file.is_file():
+                raise FileNotFoundError(
+                    f'FR3 mesh is not installed: {mesh_file}. '
+                    'Rebuild fr3_bolt_cell and source install/setup.bash before launching.')
+    urdf = urdf_document.toxml()
     robot = {'robot_description': ParameterValue(urdf, value_type=str)}
 
     def read_yaml(name):
@@ -119,6 +130,9 @@ def start_cell(context):
         RegisterEventHandler(OnShutdown(on_shutdown=lambda event, context: run_dir.cleanup())),
     ]
     return handlers + [
+        # This cell uses local assets only. Avoid the Classic GUI's model-list
+        # download, which can otherwise delay startup/shutdown on offline hosts.
+        SetEnvironmentVariable(name='GAZEBO_MODEL_DATABASE_URI', value=''),
         LogInfo(msg='Simulation only: side-mounted FR3, fixed head RGB-D and 25 mm bolts.'),
         LogInfo(msg='Generated world: '+str(world_file)), rsp, gazebo, spawn]
 

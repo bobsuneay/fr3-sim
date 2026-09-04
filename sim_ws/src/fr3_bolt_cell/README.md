@@ -19,6 +19,8 @@
 
 如果终端提示符带有 `(base)` 或其他 Conda 环境，先执行 `conda deactivate`，直到退出 Conda，再加载 ROS。本包的 Gazebo 模型生成脚本、控制器生成脚本和规划场景 Python 节点已显式使用 `/usr/bin/python3`；系统 Python 仍需安装 `python3-numpy` 等依赖。已遇到 `No module named 'numpy'` 的用户可直接按[故障恢复命令](docs/Ubuntu22.04.md#python-environment-recovery)更新和重编译。
 
+若出现 `model://fr3_bolt_cell/...` 找不到、`No mesh specified` 或等待在线模型库，按[网格路径恢复命令](docs/Ubuntu22.04.md#gazebo-mesh-path-recovery)检查。包已补上 Gazebo 模型路径导出，重新编译后由 Gazebo ROS 自动加载。
+
 把本仓库的整个 `sim_ws` 文件夹复制到 Ubuntu 的 `~/fr3_bolt_ws`，使 `~/fr3_bolt_ws/src/fr3_bolt_cell/package.xml` 存在。已安装 ROS 2 Humble 后：
 
 ```bash

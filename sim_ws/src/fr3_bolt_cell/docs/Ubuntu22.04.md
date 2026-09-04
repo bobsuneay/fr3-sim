@@ -259,6 +259,48 @@ ros2 launch fr3_bolt_cell gazebo.launch.py
 
 参照：[Gazebo 模型生成脚本的解释器声明](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/ros2/gazebo_ros/scripts/spawn_entity.py)、[ROS 2 官方 Python 环境说明](https://github.com/ros2/ros2_documentation/blob/humble/source/How-To-Guides/Using-Python-Packages.rst)。
 
+<a id="gazebo-mesh-path-recovery"></a>
+
+### FR3 网格找不到、等待在线模型库
+
+典型日志为 `URI not supported by Fuel [model://fr3_bolt_cell/meshes/...]`、`File or path does not exist`、`No mesh specified`，并伴随 `Waiting for model database update to complete`。
+
+Gazebo 读取转换后的 `model://fr3_bolt_cell/meshes/...` 时，需要从 `GAZEBO_MODEL_PATH` 中找到包含 `fr3_bolt_cell` 文件夹的目录。该目录是安装前缀里的 **share**，不是 `share/fr3_bolt_cell`，也不是源码的 meshes 目录。原始版本遗漏了这个搜索路径导出，即使 RViz 能找到 `package://` 网格，也不能说明 Gazebo 能加载它。
+
+修复后的 `package.xml` 导出 `<gazebo_ros gazebo_model_path="${prefix}/.."/>`；Gazebo ROS 将 `${prefix}` 替换成包的 share 目录，并把导出结果加入 gzserver、gzclient 的模型搜索路径。launch 同时检查网格是否已经安装，并关闭本场景不需要的 Classic 在线模型数据库查询。[官方路径加载实现](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/ros2/gazebo_ros/scripts/gazebo_ros_paths.py)
+
+尚未更新源码时，也能用下面的临时环境设置验证现有安装（此时不必拉取 GitHub 修复）：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/fr3-sim/sim_ws/install/setup.bash
+export ROS_DOMAIN_ID=31
+
+fr3_prefix="$(ros2 pkg prefix fr3_bolt_cell)"
+ls -lh "$fr3_prefix/share/fr3_bolt_cell/meshes/fairino3_v6/wrist1_link.STL"
+```
+
+上面的文件必须存在。如果不存在，先确认源码 meshes 目录完整，然后用系统 Python 重编译并重新 source；路径以用户实际工作空间为准。
+
+```bash
+cd ~/fr3-sim/sim_ws
+/usr/bin/python3 /usr/bin/colcon build --symlink-install --packages-select fr3_bolt_cell
+source install/setup.bash
+fr3_prefix="$(ros2 pkg prefix fr3_bolt_cell)"
+```
+
+确认文件存在后，在启动 Gazebo 的同一个终端执行：
+
+```bash
+export GAZEBO_MODEL_PATH="$fr3_prefix/share${GAZEBO_MODEL_PATH:+:$GAZEBO_MODEL_PATH}"
+export GAZEBO_MODEL_DATABASE_URI=""
+ros2 launch fr3_bolt_cell gazebo.launch.py
+```
+
+已有的 GAZEBO_MODEL_PATH 会保留，临时设置仅影响当前终端及它启动的进程。关闭 Classic 在线模型库查询不会补回缺失的本地 STL，所以必须先确认文件和搜索目录。Fuel 的报错也不表示需要重新下载 FR3 模型。
+
+当控制器启动成功，另一个同域终端可执行 `timeout 10s ros2 control list_controllers -c /controller_manager`；应看到三个 active 控制器。若网格错误消失但控制管理器仍未出现，请保留最新 gzserver 中 `gazebo_ros2_control` 插件日志，继续定位。
+
 ### 无 GUI 和其他故障
 
 关闭 Gazebo 窗口不等于关闭深度相机的图形渲染依赖。已有显示环境时可：
@@ -282,7 +324,7 @@ LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x720x24" \
 | spawn_entity.py 找不到 NumPy | 退出 Conda，安装系统 python3-numpy，拉取修复并用 /usr/bin/python3 调用 colcon 重编译，见上方恢复命令 |
 | `/spawn_entity` 不存在 | Gazebo 插件是否加载；必须通过本包的 gazebo_ros launch，不能只启动裸 gzserver |
 | 控制器一直等待 | `libgazebo_ros2_control.so` 是否安装、同域中是否存在重复 controller_manager、URDF 插件日志 |
-| 找不到 FR3 STL | 是否完成 colcon 并 source 当前工作空间；URI 应为 `package://fr3_bolt_cell/meshes/...` |
+| 找不到 FR3 STL / No mesh specified | 确认安装后的 STL 存在；GAZEBO_MODEL_PATH 要包含安装前缀下的 share，按上方网格路径恢复步骤检查 |
 | 没有深度或点云 | `libgazebo_ros_camera.so`、Gazebo 是否播放、显示/OpenGL、实际订阅话题、命名空间 |
 | RViz 点云存在但不显示 | Fixed Frame=world、TF、QoS Best Effort、PointCloud2 的 Color Transformer=RGB8 |
 | MoveIt 规划成功但不执行 | 两个 FollowJointTrajectory action 是否存在，关节名是否一致，所有节点是否 use_sim_time |

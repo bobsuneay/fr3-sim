@@ -6,6 +6,8 @@
 
 执行 `pytest`：**18 项通过**，有一条 Xacro/Python 3.9 的 DeprecationWarning。Python 编译检查、`setup.py check`、安装数据文件存在性检查均通过；动态 world 生成成功。
 
+后续用户运行日志暴露了 Gazebo 模型路径未导出的问题：原有测试只核对源目录里的网格文件，未覆盖 Gazebo 的 `model://` 搜索。现已补上路径导出，并新增 isolated/merged 两种 colcon 安装目录布局的资源查找回归测试。本轮针对该问题运行的两个回归测试和语法检查均通过（3 passed，17 deselected）；这些仍是离线检查，Ubuntu 中的 Gazebo 加载结果待复核。
+
 覆盖范围：
 
 - Xacro 展开无残留宏，URDF 单根树连通，link 名称唯一。
