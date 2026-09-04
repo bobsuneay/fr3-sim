@@ -24,6 +24,9 @@ def start_cell(context):
     scene_file = Path(LaunchConfiguration('scene').perform(context)).expanduser().resolve()
     scene = load_scene(scene_file)
     moveit_enabled = LaunchConfiguration('moveit').perform(context).lower() in ('true', '1')
+    # Humble's Ubuntu binaries use system Python 3.10. spawn_entity.py uses
+    # /usr/bin/env python3, which can otherwise select an active Conda interpreter.
+    ros_python = '/usr/bin/python3'
     run_dir = tempfile.TemporaryDirectory(prefix='fr3_bolt_cell_')
     world_file = Path(run_dir.name)/'cell.world'
     world_file.write_text(world_xml(scene), encoding='utf-8')
@@ -67,11 +70,13 @@ def start_cell(context):
         launch_arguments={'world': str(world_file), 'gui': LaunchConfiguration('gui'),
                           'verbose': 'true', 'pause': 'false'}.items())
     spawn = Node(package='gazebo_ros', executable='spawn_entity.py',
+                 prefix=ros_python,
                  arguments=['-entity', 'fr3_cell', '-topic', 'robot_description',
                             '-timeout', '120'], output='screen')
 
     def spawner(name):
         return Node(package='controller_manager', executable='spawner',
+                    prefix=ros_python,
                     arguments=[name, '--controller-manager', '/controller_manager',
                                '--controller-manager-timeout', '120'], output='screen')
 
@@ -82,6 +87,7 @@ def start_cell(context):
                       parameters=[moveit], output='screen',
                       condition=IfCondition(LaunchConfiguration('moveit')))
     scene_node = Node(package='fr3_bolt_cell', executable='publish_scene',
+                      prefix=ros_python,
                       parameters=[{'use_sim_time': True, 'scene_file': str(scene_file)}],
                       condition=IfCondition(LaunchConfiguration('moveit')), output='screen')
     rviz = Node(package='rviz2', executable='rviz2',

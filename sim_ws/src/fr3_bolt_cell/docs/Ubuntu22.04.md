@@ -17,6 +17,8 @@ gazebo --version
 
 ## 1. 复制、安装依赖、编译
 
+如果终端仍显示 `(base)`，先执行 `conda deactivate`，再 source ROS。编译和运行 ROS Python 节点使用 Ubuntu 的系统 Python。不要仅在 Conda 中安装 NumPy来修复 ROS 消息依赖；Humble 的预编译扩展需要匹配系统 Python。
+
 不要复制 Windows 的 `.tools`，也不要复制 `Desktop/FR3` 内的 `build`、`install`、`log` 和 YOLO 权重。新包需要的七个 STL 已包含在源码内，不依赖桌面绝对路径。
 
 将仓库的 `sim_ws` 目录复制/重命名为 Ubuntu 的 `~/fr3_bolt_ws`。若你的 Ubuntu 里已有工作空间，也可只把 `sim_ws/src/fr3_bolt_cell` 放进该工作空间的 `src/`。不要同时放两份同名包。
@@ -27,7 +29,7 @@ cd ~/fr3_bolt_ws
 test -f src/fr3_bolt_cell/package.xml
 rosdep update
 rosdep install --from-paths src/fr3_bolt_cell --ignore-src -r -y --rosdistro humble
-colcon build --symlink-install --packages-select fr3_bolt_cell
+/usr/bin/python3 /usr/bin/colcon build --symlink-install --packages-select fr3_bolt_cell
 source install/setup.bash
 ros2 pkg prefix fr3_bolt_cell
 ros2 pkg executables fr3_bolt_cell
@@ -218,6 +220,47 @@ gz sdf -k /tmp/fr3_cell.sdf
 
 ## 8. 无 GUI 验收与故障定位
 
+<a id="python-environment-recovery"></a>
+
+### spawn_entity.py 报 `No module named 'numpy'`
+
+若第一条异常发生在 `spawn_entity.py → geometry_msgs → import numpy`，表示运行模型生成脚本的 Python 环境没有 NumPy。Conda `(base)` 会改变 PATH，而 Gazebo 的脚本使用 `#!/usr/bin/env python3`，因此可能选中 Conda Python；单凭日志不能排除系统 NumPy 本身未安装。
+
+启动器收到模型生成失败后会关闭 Gazebo 和 robot_state_publisher，所以随后出现的 `SIGINT`、退出码 `-2` 和 `rcl node's context is invalid` 在该日志顺序下属于关闭过程的后续错误。应先解决模型生成脚本的依赖问题。
+
+修复后的 launch 使用 `/usr/bin/python3` 启动 `spawn_entity.py`、控制器 spawner 和本包 `publish_scene`。先退出 Conda（如有多层环境，重复到提示符无 Conda 名称）：
+
+```bash
+conda deactivate
+```
+
+对于按 GitHub 使用说明克隆到 `~/fr3-sim` 的用户，执行：
+
+```bash
+cd ~/fr3-sim
+git pull --ff-only origin main
+
+sudo apt update
+sudo apt install -y python3-numpy python3-yaml python3-lxml python3-colcon-common-extensions
+source /opt/ros/humble/setup.bash
+
+/usr/bin/python3 -c "import sys, numpy, rclpy; from geometry_msgs.msg import Pose; from lxml import etree; print(sys.executable); print(numpy.__version__); print('ROS Python imports OK')"
+
+cd ~/fr3-sim/sim_ws
+/usr/bin/python3 /usr/bin/colcon build --symlink-install --packages-select fr3_bolt_cell
+source install/setup.bash
+export ROS_DOMAIN_ID=31
+ros2 launch fr3_bolt_cell gazebo.launch.py
+```
+
+导入检查应输出 `/usr/bin/python3` 和 `ROS Python imports OK`。若仍失败，先保留这条命令的完整异常，不要跳过检查继续启动。若工作空间采用前面文档的 `~/fr3_bolt_ws` 复制方式，将重新编译和 source 的路径相应调整。
+
+在更新后的 launch 中，Python 子进程命令会带 `/usr/bin/python3` 前缀。此修复只验证了解释器选择逻辑；是否成功创建 Gazebo 模型及后续控制器，须在 Ubuntu 重启验证。
+
+参照：[Gazebo 模型生成脚本的解释器声明](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/ros2/gazebo_ros/scripts/spawn_entity.py)、[ROS 2 官方 Python 环境说明](https://github.com/ros2/ros2_documentation/blob/humble/source/How-To-Guides/Using-Python-Packages.rst)。
+
+### 无 GUI 和其他故障
+
 关闭 Gazebo 窗口不等于关闭深度相机的图形渲染依赖。已有显示环境时可：
 
 ```bash
@@ -236,6 +279,7 @@ LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x720x24" \
 
 | 症状 | 首先检查 |
 | --- | --- |
+| spawn_entity.py 找不到 NumPy | 退出 Conda，安装系统 python3-numpy，拉取修复并用 /usr/bin/python3 调用 colcon 重编译，见上方恢复命令 |
 | `/spawn_entity` 不存在 | Gazebo 插件是否加载；必须通过本包的 gazebo_ros launch，不能只启动裸 gzserver |
 | 控制器一直等待 | `libgazebo_ros2_control.so` 是否安装、同域中是否存在重复 controller_manager、URDF 插件日志 |
 | 找不到 FR3 STL | 是否完成 colcon 并 source 当前工作空间；URI 应为 `package://fr3_bolt_cell/meshes/...` |
