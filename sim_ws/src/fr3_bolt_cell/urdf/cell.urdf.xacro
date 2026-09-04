@@ -1,0 +1,162 @@
+<?xml version="1.0"?>
+<robot name="fairino3_v6_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Explicit paths also allow non-ROS offline Xacro tests. -->
+  <xacro:arg name="arm_file" default="$(find fr3_bolt_cell)/urdf/fr3_arm.urdf"/>
+  <xacro:arg name="scene_file" default="$(find fr3_bolt_cell)/config/scene.yaml"/>
+  <xacro:arg name="initial_file" default="$(find fr3_bolt_cell)/config/initial_positions.yaml"/>
+  <xacro:arg name="controllers_file" default="$(find fr3_bolt_cell)/config/controllers.yaml"/>
+  <xacro:property name="scene" value="${xacro.load_yaml('$(arg scene_file)')}"/>
+  <xacro:property name="initial" value="${xacro.load_yaml('$(arg initial_file)')['initial_positions']}"/>
+  <xacro:property name="support" value="${scene['support']}"/>
+  <xacro:property name="mount" value="${scene['mount']}"/>
+  <xacro:property name="camera" value="${scene['camera']}"/>
+  <xacro:include filename="$(arg arm_file)"/>
+
+  <xacro:macro name="box_link" params="name size mass color xyz:='0 0 0'">
+    <link name="${name}">
+      <inertial>
+        <origin xyz="${xyz}"/>
+        <mass value="${mass}"/>
+        <inertia ixx="${mass*(size[1]**2+size[2]**2)/12}" ixy="0" ixz="0"
+                 iyy="${mass*(size[0]**2+size[2]**2)/12}" iyz="0"
+                 izz="${mass*(size[0]**2+size[1]**2)/12}"/>
+      </inertial>
+      <visual>
+        <origin xyz="${xyz}"/><geometry><box size="${' '.join(str(v) for v in size)}"/></geometry>
+        <material name="${name}_color"><color rgba="${color}"/></material>
+      </visual>
+      <collision>
+        <origin xyz="${xyz}"/><geometry><box size="${' '.join(str(v) for v in size)}"/></geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+  <link name="world"/>
+  <xacro:box_link name="support_link" size="${support['size']}" mass="15"
+                  color="0.60 0.65 0.70 1" xyz="0 0 ${support['size'][2]/2}"/>
+  <!-- Gazebo recognizes a fixed joint to world. Do not make the whole arm static. -->
+  <joint name="world_to_support" type="fixed">
+    <parent link="world"/><child link="support_link"/>
+  </joint>
+  <xacro:box_link name="support_foot" size="${support['foot_size']}" mass="8"
+                  color="0.25 0.28 0.30 1"/>
+  <joint name="support_to_foot" type="fixed">
+    <parent link="support_link"/><child link="support_foot"/>
+    <origin xyz="0 0 ${support['foot_size'][2]/2}"/>
+  </joint>
+  <xacro:box_link name="side_mount_plate" size="${[0.15,0.02,0.15]}" mass="0.5"
+                  color="0.20 0.22 0.25 1"/>
+  <joint name="support_to_plate" type="fixed">
+    <parent link="support_link"/><child link="side_mount_plate"/>
+    <origin xyz="${mount['xyz'][0]} ${mount['xyz'][1]+0.01} ${mount['xyz'][2]}"/>
+  </joint>
+  <joint name="side_mount_to_fr3" type="fixed">
+    <parent link="support_link"/><child link="base_link"/>
+    <origin xyz="${' '.join(str(v) for v in mount['xyz'])}"
+            rpy="${' '.join(str(v) for v in mount['rpy'])}"/>
+  </joint>
+
+  <!-- User's wrist3_link origin is inside the wrist; flange face is at local Z=0.1 m. -->
+  <link name="tool0"/>
+  <joint name="wrist_to_tool0" type="fixed">
+    <parent link="wrist3_link"/><child link="tool0"/><origin xyz="0 0 0.10"/>
+  </joint>
+  <xacro:box_link name="gripper_palm" size="${[0.040,0.09,0.030]}" mass="0.35"
+                  color="0.15 0.18 0.22 1" xyz="0 0 0.015"/>
+  <joint name="tool0_to_gripper" type="fixed">
+    <parent link="tool0"/><child link="gripper_palm"/>
+  </joint>
+  <!-- Two mirrored prismatic joints: opening = q_left + q_right, not a fixed mock. -->
+  <xacro:macro name="finger" params="side sign">
+    <xacro:box_link name="${side}_finger" size="${[0.012,0.006,0.045]}" mass="0.045"
+                    color="0.22 0.25 0.28 1" xyz="0 0 0.0225"/>
+    <joint name="${side}_finger_joint" type="prismatic">
+      <parent link="gripper_palm"/><child link="${side}_finger"/>
+      <origin xyz="0 ${sign*0.003} 0.031"/>
+      <axis xyz="0 ${sign} 0"/>
+      <limit lower="0.0" upper="0.030" effort="15" velocity="0.03"/>
+      <dynamics damping="1.0" friction="0.05"/>
+    </joint>
+    <gazebo reference="${side}_finger">
+      <material>Gazebo/DarkGrey</material>
+      <mu1>1.0</mu1><mu2>1.0</mu2><kp>100000</kp><kd>10</kd>
+      <minDepth>0.00005</minDepth><maxVel>0.05</maxVel>
+      <selfCollide>true</selfCollide>
+    </gazebo>
+  </xacro:macro>
+  <xacro:finger side="left" sign="1"/>
+  <xacro:finger side="right" sign="-1"/>
+  <link name="gripper_tcp"/>
+  <joint name="palm_to_tcp" type="fixed">
+    <parent link="gripper_palm"/><child link="gripper_tcp"/><origin xyz="0 0 0.066"/>
+  </joint>
+
+  <!-- Short mounting bracket joins the torso top to the camera housing. -->
+  <xacro:box_link name="head_bracket" size="${[0.12,0.05,0.06]}" mass="0.12"
+                  color="0.35 0.38 0.40 1"/>
+  <joint name="support_to_head_bracket" type="fixed">
+    <parent link="support_link"/><child link="head_bracket"/>
+    <origin xyz="${camera['xyz'][0]-0.04} ${camera['xyz'][1]} ${camera['xyz'][2]-0.055}"/>
+  </joint>
+  <!-- Fixed eye-to-hand camera, NOT wrist mounted. -->
+  <xacro:box_link name="head_camera_link" size="${[0.045,0.13,0.045]}" mass="0.2"
+                  color="0.08 0.09 0.12 1"/>
+  <joint name="support_to_head_camera" type="fixed">
+    <parent link="support_link"/><child link="head_camera_link"/>
+    <origin xyz="${' '.join(str(v) for v in camera['xyz'])}"
+            rpy="${' '.join(str(v) for v in camera['rpy'])}"/>
+  </joint>
+  <link name="head_camera_optical_frame"/>
+  <joint name="head_camera_optical_joint" type="fixed">
+    <parent link="head_camera_link"/><child link="head_camera_optical_frame"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+  <gazebo reference="support_to_head_camera"><preserveFixedJoint>true</preserveFixedJoint></gazebo>
+  <gazebo reference="head_camera_link">
+    <material>Gazebo/Black</material>
+    <sensor name="head_rgbd_sensor" type="depth">
+      <always_on>true</always_on><update_rate>${camera['rate']}</update_rate>
+      <visualize>false</visualize>
+      <camera name="head_rgbd">
+        <horizontal_fov>${camera['horizontal_fov']}</horizontal_fov>
+        <image><width>${camera['width']}</width><height>${camera['height']}</height><format>R8G8B8</format></image>
+        <clip><near>${camera['near']}</near><far>${camera['far']}</far></clip>
+      </camera>
+      <plugin name="head_camera_ros" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/</namespace></ros>
+        <camera_name>head_camera</camera_name>
+        <frame_name>head_camera_optical_frame</frame_name>
+        <min_depth>${camera['near']}</min_depth><max_depth>${camera['far']}</max_depth>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <xacro:macro name="controlled_joint" params="name">
+    <joint name="${name}">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">${initial[name]}</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </xacro:macro>
+  <ros2_control name="Fr3GazeboSystem" type="system">
+    <hardware><plugin>gazebo_ros2_control/GazeboSystem</plugin></hardware>
+    <xacro:controlled_joint name="j1"/><xacro:controlled_joint name="j2"/>
+    <xacro:controlled_joint name="j3"/><xacro:controlled_joint name="j4"/>
+    <xacro:controlled_joint name="j5"/><xacro:controlled_joint name="j6"/>
+    <xacro:controlled_joint name="left_finger_joint"/>
+    <xacro:controlled_joint name="right_finger_joint"/>
+  </ros2_control>
+  <gazebo>
+    <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+      <robot_param>robot_description</robot_param>
+      <robot_param_node>robot_state_publisher</robot_param_node>
+      <parameters>$(arg controllers_file)</parameters>
+    </plugin>
+  </gazebo>
+  <xacro:macro name="arm_surface" params="link">
+    <gazebo reference="${link}"><material>Gazebo/White</material><selfCollide>true</selfCollide></gazebo>
+  </xacro:macro>
+  <xacro:arm_surface link="base_link"/><xacro:arm_surface link="shoulder_link"/>
+  <xacro:arm_surface link="upperarm_link"/><xacro:arm_surface link="forearm_link"/>
+  <xacro:arm_surface link="wrist1_link"/><xacro:arm_surface link="wrist2_link"/>
+  <xacro:arm_surface link="wrist3_link"/>
+</robot>

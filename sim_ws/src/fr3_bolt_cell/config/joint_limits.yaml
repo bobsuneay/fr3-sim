@@ -1,0 +1,11 @@
+default_velocity_scaling_factor: 0.1
+default_acceleration_scaling_factor: 0.1
+joint_limits:
+  j1: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 1.0}
+  j2: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 1.0}
+  j3: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 1.0}
+  j4: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 1.0}
+  j5: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 1.0}
+  j6: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 1.0}
+  left_finger_joint: {has_velocity_limits: true, max_velocity: 0.03, has_acceleration_limits: true, max_acceleration: 0.1}
+  right_finger_joint: {has_velocity_limits: true, max_velocity: 0.03, has_acceleration_limits: true, max_acceleration: 0.1}

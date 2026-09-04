@@ -1,0 +1,72 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 42; 46; 52
+    Fixed Frame: world
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 115; 115; 115
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: MotionPlanning
+      Enabled: true
+      Robot Description: robot_description
+      Planning Scene Topic: /monitored_planning_scene
+      Planning Request:
+        Planning Group: fairino3_v6_group
+        Query Goal State: true
+        Query Start State: false
+        Velocity Scaling Factor: 0.1
+        Acceleration Scaling Factor: 0.1
+      Scene Robot:
+        Robot Alpha: 1
+        Show Robot Collision: false
+        Show Robot Visual: true
+      Scene Geometry:
+        Scene Alpha: 1
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Head PointCloud
+      Enabled: true
+      Topic:
+        Value: /head_camera/points
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+    - Class: rviz_default_plugins/Image
+      Name: Head RGB
+      Enabled: true
+      Topic:
+        Value: /head_camera/image_raw
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 2.4
+      Pitch: 0.38
+      Yaw: 5.1
+      Focal Point: {X: 0.30, Y: 0.0, Z: 0.8}
+Window Geometry:
+  Width: 1440
+  Height: 900
