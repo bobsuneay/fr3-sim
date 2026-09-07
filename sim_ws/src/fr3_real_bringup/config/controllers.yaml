@@ -1,0 +1,23 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    fairino3_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+fairino3_controller:
+  ros__parameters:
+    joints: [j1, j2, j3, j4, j5, j6]
+    command_interfaces: [position]
+    state_interfaces: [position]
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      goal_time: 1.0
+      j1: {trajectory: 0.05, goal: 0.01}
+      j2: {trajectory: 0.05, goal: 0.01}
+      j3: {trajectory: 0.05, goal: 0.01}
+      j4: {trajectory: 0.05, goal: 0.01}
+      j5: {trajectory: 0.05, goal: 0.01}
+      j6: {trajectory: 0.05, goal: 0.01}

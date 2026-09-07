@@ -1,0 +1,12 @@
+# Intentionally incomplete: do not set confirmations without checking hardware.
+firmware_version: ""
+driver_package: ""          # e.g. fairino_hardware_v3_9_9 ONLY if confirmed compatible
+controller_ip: ""           # actual robot address; used for consistency checks below
+driver_configured_ip: ""    # address verified in the installed driver/source
+update_rate: 100            # verify against selected driver's ServoJ period
+checks:
+  driver_reviewed: false    # version, IP, six axes, initial pose sync, error handling
+  geometry_tcp_payload_verified: false
+  workcell_estop_and_low_speed_verified: false
+# No robot_ip hardware parameter is injected: the reviewed official version
+# hard-codes its IP. Editing controller_ip here does NOT reconfigure that driver.

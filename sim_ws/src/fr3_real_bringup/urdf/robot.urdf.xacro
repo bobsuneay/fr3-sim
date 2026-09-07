@@ -1,0 +1,121 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fairino3_v6_robot">
+  <xacro:arg name="arm_file" default=""/>
+  <xacro:arg name="cell_file" default=""/>
+  <xacro:arg name="initial_file" default=""/>
+  <xacro:arg name="mode" default="mock"/>
+  <xacro:property name="cfg" value="${xacro.load_yaml('$(arg cell_file)')}"/>
+  <xacro:property name="t" value="${cfg['table']}"/>
+  <xacro:property name="b" value="${cfg['base']}"/>
+  <xacro:property name="g" value="${cfg['tool']}"/>
+  <xacro:include filename="$(arg arm_file)"/>
+  <link name="world"/>
+  <link name="table">
+    <visual>
+      <origin xyz="0 0 ${t['height']-t['thickness']/2}"/>
+      <geometry><box size="${t['length']} ${t['width']} ${t['thickness']}"/></geometry>
+      <material name="table_gray"><color rgba="0.45 0.48 0.52 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${t['height']-t['thickness']/2}"/>
+      <geometry><box size="${t['length']} ${t['width']} ${t['thickness']}"/></geometry>
+    </collision>
+    <xacro:macro name="leg" params="sx sy">
+      <visual>
+        <origin xyz="${sx*(t['length']-t['leg_width'])/2} ${sy*(t['width']-t['leg_width'])/2} ${(t['height']-t['thickness'])/2}"/>
+        <geometry><box size="${t['leg_width']} ${t['leg_width']} ${t['height']-t['thickness']}"/></geometry>
+        <material name="table_gray"/>
+      </visual>
+      <collision>
+        <origin xyz="${sx*(t['length']-t['leg_width'])/2} ${sy*(t['width']-t['leg_width'])/2} ${(t['height']-t['thickness'])/2}"/>
+        <geometry><box size="${t['leg_width']} ${t['leg_width']} ${t['height']-t['thickness']}"/></geometry>
+      </collision>
+    </xacro:macro>
+    <xacro:leg sx="1" sy="1"/><xacro:leg sx="1" sy="-1"/>
+    <xacro:leg sx="-1" sy="1"/><xacro:leg sx="-1" sy="-1"/>
+  </link>
+  <joint name="world_to_table" type="fixed">
+    <parent link="world"/><child link="table"/>
+  </joint>
+  <joint name="table_to_base" type="fixed">
+    <parent link="table"/><child link="base_link"/>
+    <origin xyz="${b['x']} ${b['y']} ${t['height']}" rpy="0 0 ${b['yaw']}"/>
+  </joint>
+  <link name="tool0"/>
+  <joint name="wrist_to_tool0" type="fixed">
+    <parent link="wrist3_link"/><child link="tool0"/>
+    <origin xyz="${' '.join(map(str,g['wrist_to_flange_xyz']))}" rpy="${' '.join(map(str,g['wrist_to_flange_rpy']))}"/>
+  </joint>
+  <joint name="tool0_to_gripper" type="fixed">
+    <parent link="tool0"/><child link="gripper_palm"/>
+    <origin xyz="${' '.join(map(str,g['flange_to_gripper_xyz']))}" rpy="${' '.join(map(str,g['flange_to_gripper_rpy']))}"/>
+  </joint>
+  <link name="gripper_palm">
+    <visual>
+      <geometry><mesh filename="package://fr3_real_bringup/meshes/hkv_tg9801/flange.stl" scale=".001 .001 .001"/></geometry>
+      <material name="hkv_metal"><color rgba=".6 .6 .62 1"/></material>
+    </visual>
+    <visual>
+      <origin xyz="0 0 .0615"/>
+      <geometry><mesh filename="package://fr3_real_bringup/meshes/hkv_tg9801/base_body.stl" scale=".001 .001 .001"/></geometry>
+      <material name="hkv_black"><color rgba=".16 .16 .18 1"/></material>
+    </visual>
+    <visual>
+      <origin xyz="0 0 .067"/>
+      <geometry><mesh filename="package://fr3_real_bringup/meshes/hkv_tg9801/rail_155.stl" scale=".001 .001 .001"/></geometry>
+      <material name="hkv_metal"/>
+    </visual>
+    <collision>
+      <origin xyz="${' '.join(map(str,g['collision_xyz']))}"/>
+      <geometry><box size="${' '.join(map(str,g['collision_size']))}"/></geometry>
+    </collision>
+  </link>
+  <!-- Fingers are fixed DISPLAY geometry. Palm envelope covers their full sweep.
+       This is deliberately not live gripper feedback or actuation. -->
+  <xacro:macro name="finger" params="side sign yaw">
+    <link name="${side}_finger">
+      <visual>
+        <geometry><mesh filename="package://fr3_real_bringup/meshes/hkv_tg9801/slider.stl" scale=".001 .001 .001"/></geometry>
+        <material name="hkv_metal"/>
+      </visual>
+      <visual>
+        <origin xyz="0 0 .008" rpy="0 0 ${yaw}"/>
+        <geometry><mesh filename="package://fr3_real_bringup/meshes/hkv_tg9801/finger.stl" scale=".001 .001 .001"/></geometry>
+        <material name="hkv_black"/>
+      </visual>
+    </link>
+    <joint name="${side}_finger_display" type="fixed">
+      <parent link="gripper_palm"/><child link="${side}_finger"/>
+      <origin xyz="${sign*(.01545+g['finger_travel'])} 0 .067"/>
+    </joint>
+  </xacro:macro>
+  <xacro:finger side="left" sign="-1" yaw="0"/>
+  <xacro:finger side="right" sign="1" yaw="${pi}"/>
+  <link name="gripper_tcp"/>
+  <joint name="gripper_to_tcp" type="fixed">
+    <parent link="gripper_palm"/><child link="gripper_tcp"/>
+    <origin xyz="${' '.join(map(str,g['gripper_to_tcp_xyz']))}" rpy="${' '.join(map(str,g['gripper_to_tcp_rpy']))}"/>
+  </joint>
+  <ros2_control name="FR3System" type="system">
+    <hardware>
+      <xacro:if value="${'$(arg mode)' == 'mock'}">
+        <plugin>mock_components/GenericSystem</plugin>
+      </xacro:if>
+      <xacro:if value="${'$(arg mode)' == 'real'}">
+        <plugin>fairino_hardware/FairinoHardwareInterface</plugin>
+      </xacro:if>
+    </hardware>
+    <xacro:macro name="axis" params="name">
+      <joint name="${name}">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <xacro:if value="${'$(arg mode)' == 'mock'}">
+            <param name="initial_value">${xacro.load_yaml('$(arg initial_file)')['initial_positions'][name]}</param>
+          </xacro:if>
+        </state_interface>
+      </joint>
+    </xacro:macro>
+    <xacro:axis name="j1"/><xacro:axis name="j2"/><xacro:axis name="j3"/>
+    <xacro:axis name="j4"/><xacro:axis name="j5"/><xacro:axis name="j6"/>
+  </ros2_control>
+</robot>

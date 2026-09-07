@@ -1,0 +1,11 @@
+# Conservative commissioning limits, not a certified safety function.
+# These are MoveIt planning limits, NOT hardware/teach pendant safety limits.
+default_velocity_scaling_factor: 0.05
+default_acceleration_scaling_factor: 0.05
+joint_limits:
+  j1: {has_velocity_limits: true, max_velocity: 0.30, has_acceleration_limits: true, max_acceleration: 0.30}
+  j2: {has_velocity_limits: true, max_velocity: 0.30, has_acceleration_limits: true, max_acceleration: 0.30}
+  j3: {has_velocity_limits: true, max_velocity: 0.30, has_acceleration_limits: true, max_acceleration: 0.30}
+  j4: {has_velocity_limits: true, max_velocity: 0.30, has_acceleration_limits: true, max_acceleration: 0.30}
+  j5: {has_velocity_limits: true, max_velocity: 0.30, has_acceleration_limits: true, max_acceleration: 0.30}
+  j6: {has_velocity_limits: true, max_velocity: 0.30, has_acceleration_limits: true, max_acceleration: 0.30}

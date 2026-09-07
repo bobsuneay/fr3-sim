@@ -1,0 +1,25 @@
+# Geometry placeholders, SI units. Measure and replace before real commissioning.
+table:
+  length: 1.20
+  width: 0.80
+  height: 0.75             # floor -> upper surface
+  thickness: 0.04
+  leg_width: 0.06
+base:
+  x: 0.25
+  y: 0.0
+  yaw: 0.0                 # normal upright mounting; roll and pitch are zero
+tool:
+  # These reproduce the previous HKV model, NOT a calibrated physical TCP.
+  wrist_to_flange_xyz: [0.0, 0.0, 0.10]
+  wrist_to_flange_rpy: [0.0, 0.0, 0.0]
+  flange_to_gripper_xyz: [0.0, 0.0, 0.0]
+  flange_to_gripper_rpy: [0.0, 0.0, 0.0]
+  gripper_to_tcp_xyz: [0.0, 0.0, 0.125]
+  gripper_to_tcp_rpy: [0.0, 0.0, 0.0]
+  # Display-only extra travel per finger, not measured physical gap or feedback.
+  finger_travel: 0.025
+  # Conservative whole-tool envelope covers all modeled finger travel.
+  # Extend this if adapter/cables/actual gripper are outside it.
+  collision_xyz: [0.0, 0.0, 0.065]
+  collision_size: [0.20, 0.10, 0.17]
