@@ -3,7 +3,11 @@
   <group name="fairino3_v6_group">
     <chain base_link="base_link" tip_link="gripper_tcp"/>
   </group>
-  <!-- No automatic home pose; no gripper controller/false finger feedback. -->
+  <group name="gripper">
+    <joint name="gripper_joint"/>
+  </group>
+  <end_effector name="tg9801" parent_link="gripper_palm"
+                group="gripper" parent_group="fairino3_v6_group"/>
   <disable_collisions link1="table" link2="base_link" reason="Mounting contact"/>
   <disable_collisions link1="table" link2="shoulder_link" reason="Base bearing contact"/>
   <disable_collisions link1="base_link" link2="shoulder_link" reason="Adjacent"/>
@@ -13,4 +17,10 @@
   <disable_collisions link1="wrist1_link" link2="wrist2_link" reason="Adjacent"/>
   <disable_collisions link1="wrist2_link" link2="wrist3_link" reason="Adjacent"/>
   <disable_collisions link1="wrist3_link" link2="gripper_palm" reason="Tool mounting contact"/>
+  <disable_collisions link1="gripper_palm" link2="gripper_gap_link" reason="Adjacent"/>
+  <disable_collisions link1="gripper_palm" link2="left_finger" reason="Adjacent"/>
+  <disable_collisions link1="gripper_palm" link2="right_finger" reason="Adjacent"/>
+  <disable_collisions link1="gripper_gap_link" link2="left_finger" reason="Mimic mechanism"/>
+  <disable_collisions link1="gripper_gap_link" link2="right_finger" reason="Mimic mechanism"/>
+  <disable_collisions link1="left_finger" link2="right_finger" reason="Contact is gripper function"/>
 </robot>

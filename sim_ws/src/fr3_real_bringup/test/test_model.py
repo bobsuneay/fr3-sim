@@ -32,9 +32,13 @@ def test_mock_has_only_six_arm_control_joints():
     assert control.find('hardware/plugin').text == 'mock_components/GenericSystem'
     assert root.find("./joint[@name='table_to_base']/origin").get('rpy') == '0 0 0.0'
     assert root.find("./joint[@name='gripper_to_tcp']") is not None
+    assert root.find("./ros2_control[@name='TG9801System']/joint[@name='gripper_joint']") is not None
+    assert root.find("./joint[@name='left_finger_joint']/mimic").get('joint') == 'gripper_joint'
 
 
 def test_real_selects_only_fairino_plugin():
     root = expanded('real')
     assert root.find('ros2_control/hardware/plugin').text == \
         'fairino_hardware/FairinoHardwareInterface'
+    assert root.find("./ros2_control[@name='TG9801System']/hardware/plugin").text == \
+        'ros2_hkv_gripper/GripperHardwareInterface'

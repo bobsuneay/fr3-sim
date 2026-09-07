@@ -98,8 +98,48 @@ fairino_hardware_v3_* 版本。选定版本后：
 先 Plan，现场确认净空后，只执行约 1° 的单轴小步动作，每次检查终点误差和控制器状态。
 RViz Stop、Ctrl+C、杀进程和断网都不是急停。
 
-## 8. 夹爪后续
+## 8. HKV 夹爪控制
 
-本包不启动 ros2_hkv_gripper，也不把第七个关节塞到六轴法奥硬件插件里。
-必须先确认串口设备、波特率、从站地址、开合方向、激活行为、实际行程和反馈换算，
-再单独启动夹爪驱动；最终整合时使用独立 gripper controller，并更新 URDF/SRDF。
+当前包已经将 HKV 接入 MoveIt：规划组 `gripper` 只有 `gripper_joint`，
+MoveIt 控制器为 `tg9801_gripper_controller/follow_joint_trajectory`。
+夹爪不是 FR3 的第七轴；一个 controller_manager 中同时加载 FR3 和 HKV 两个硬件组件。
+
+先确认夹爪串口、波特率、从站地址、开合方向、激活行为、实际行程和反馈换算：
+
+    ls -l /dev/serial/by-id/
+    groups
+
+你提供的 `ros2_hkv_gripper` 目录需要复制到 Ubuntu 工作空间后单独编译一次：
+
+    mkdir -p ~/hkv_ws/src
+    cp -a /path/to/ros2_hkv_gripper ~/hkv_ws/src/
+    source /opt/ros/humble/setup.bash
+    cd ~/hkv_ws
+    rosdep install --from-paths src --ignore-src -r -y
+    colcon build --symlink-install --packages-select ros2_hkv_gripper
+    source install/setup.bash
+
+如果源目录包名不是 `ros2_hkv_gripper`，以 `colcon list` 显示的实际包名为准。
+不要启动它自己的 `gripper_control.launch.py`，因为本包会把夹爪硬件加载到同一个
+controller_manager 中；只 source 这个工作空间即可。
+
+真机启动时传入串口参数：
+
+    ros2 launch fr3_real_bringup bringup.launch.py mode:=real confirm_real:=true enable_execution:=true real_config:=$HOME/fr3_config/real.yaml serial_port:=/dev/serial/by-id/YOUR_GRIPPER baud_rate:=1000000 slave_address:=1
+
+启动后检查：
+
+    ros2 control list_controllers
+    ros2 control list_hardware_interfaces
+    ros2 action list -t | rg 'follow_joint_trajectory'
+
+应该同时看到 `fairino3_controller` 和 `tg9801_gripper_controller`，并有两个
+FollowJointTrajectory action。MoveIt 中选择 `gripper` 规划组即可规划开合。
+
+HKV 文档定义 `gripper_joint` 的 0 到 0.1 m 为开度命令，但实际机械净间距、
+寄存器方向和闭合力仍需你现场验证。首次只执行很小的开度变化，确认手指方向和
+急停；不要把 0/0.1 直接当作已标定的物理间距。
+
+如果夹爪驱动激活失败，先单独按 ros2_hkv_gripper 的说明验证串口，再启动本包。
+不要同时启动该包自带的第二个 controller_manager，否则会争用同一夹爪串口和
+重复发布 robot_description。

@@ -4,10 +4,18 @@
   <xacro:arg name="cell_file" default=""/>
   <xacro:arg name="initial_file" default=""/>
   <xacro:arg name="mode" default="mock"/>
+  <xacro:arg name="serial_port" default="/dev/ttyACM0"/>
+  <xacro:arg name="baud_rate" default="1000000"/>
+  <xacro:arg name="timeout" default="1000"/>
+  <xacro:arg name="slave_address" default="1"/>
+  <xacro:arg name="position_mode_speed_register" default="1000"/>
+  <xacro:arg name="target_force_percent" default="50"/>
+  <xacro:arg name="gripper_closed_position" default="0.1"/>
   <xacro:property name="cfg" value="${xacro.load_yaml('$(arg cell_file)')}"/>
   <xacro:property name="t" value="${cfg['table']}"/>
   <xacro:property name="b" value="${cfg['base']}"/>
   <xacro:property name="g" value="${cfg['tool']}"/>
+  <xacro:property name="gripper_closed_position" value="$(arg gripper_closed_position)"/>
   <xacro:include filename="$(arg arm_file)"/>
   <link name="world"/>
   <link name="table">
@@ -70,9 +78,17 @@
       <geometry><box size="${' '.join(map(str,g['collision_size']))}"/></geometry>
     </collision>
   </link>
-  <!-- Fingers are fixed DISPLAY geometry. Palm envelope covers their full sweep.
-       This is deliberately not live gripper feedback or actuation. -->
-  <xacro:macro name="finger" params="side sign yaw">
+  <link name="gripper_gap_link"/>
+  <!-- gripper_joint is the single MoveIt/ros2_control command joint and represents
+       the physical two-finger opening. Its range is 0=open to 0.1=closed per the
+       supplied HKV driver documentation. -->
+  <joint name="gripper_joint" type="prismatic">
+    <parent link="gripper_palm"/><child link="gripper_gap_link"/>
+    <origin xyz="0 0 .067"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="${gripper_closed_position}" effort="1000" velocity="0.5"/>
+  </joint>
+  <xacro:macro name="finger" params="side sign yaw multiplier">
     <link name="${side}_finger">
       <visual>
         <geometry><mesh filename="package://fr3_real_bringup/meshes/hkv_tg9801/slider.stl" scale=".001 .001 .001"/></geometry>
@@ -84,13 +100,16 @@
         <material name="hkv_black"/>
       </visual>
     </link>
-    <joint name="${side}_finger_display" type="fixed">
+    <joint name="${side}_finger_joint" type="prismatic">
       <parent link="gripper_palm"/><child link="${side}_finger"/>
-      <origin xyz="${sign*(.01545+g['finger_travel'])} 0 .067"/>
+      <origin xyz="${sign*.01545} 0 .067"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-${g['finger_travel']}" upper="${g['finger_travel']}" effort="100" velocity="0.25"/>
+      <mimic joint="gripper_joint" multiplier="${multiplier}" offset="0"/>
     </joint>
   </xacro:macro>
-  <xacro:finger side="left" sign="-1" yaw="0"/>
-  <xacro:finger side="right" sign="1" yaw="${pi}"/>
+  <xacro:finger side="left" sign="-1" yaw="0" multiplier="0.5"/>
+  <xacro:finger side="right" sign="1" yaw="${pi}" multiplier="-0.5"/>
   <link name="gripper_tcp"/>
   <joint name="gripper_to_tcp" type="fixed">
     <parent link="gripper_palm"/><child link="gripper_tcp"/>
@@ -117,5 +136,35 @@
     </xacro:macro>
     <xacro:axis name="j1"/><xacro:axis name="j2"/><xacro:axis name="j3"/>
     <xacro:axis name="j4"/><xacro:axis name="j5"/><xacro:axis name="j6"/>
+  </ros2_control>
+  <ros2_control name="TG9801System" type="system">
+    <hardware>
+      <xacro:if value="${'$(arg mode)' == 'mock'}">
+        <plugin>mock_components/GenericSystem</plugin>
+        <param name="fake_sensor_commands">false</param>
+      </xacro:if>
+      <xacro:if value="${'$(arg mode)' == 'real'}">
+        <plugin>ros2_hkv_gripper/GripperHardwareInterface</plugin>
+        <param name="serial_port">$(arg serial_port)</param>
+        <param name="baud_rate">$(arg baud_rate)</param>
+        <param name="timeout">$(arg timeout)</param>
+        <param name="slave_address">$(arg slave_address)</param>
+        <param name="gripper_model">TG-9801</param>
+        <param name="gripper_closed_position">$(arg gripper_closed_position)</param>
+        <param name="position_open_register">1000</param>
+        <param name="position_closed_register">0</param>
+        <param name="position_mode_speed_register">$(arg position_mode_speed_register)</param>
+        <param name="target_force_percent">$(arg target_force_percent)</param>
+      </xacro:if>
+    </hardware>
+    <joint name="gripper_joint">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <xacro:if value="${'$(arg mode)' == 'mock'}">
+          <param name="initial_value">0.0</param>
+        </xacro:if>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
   </ros2_control>
 </robot>

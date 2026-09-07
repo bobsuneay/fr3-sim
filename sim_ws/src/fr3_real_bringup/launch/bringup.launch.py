@@ -54,6 +54,13 @@ def start(context):
         'mode': mode, 'cell_file': cell.as_posix(),
         'arm_file': (share/'urdf/fr3_arm.urdf').as_posix(),
         'initial_file': (share/'config/initial_positions.yaml').as_posix(),
+        'serial_port': arg('serial_port'),
+        'baud_rate': arg('baud_rate'),
+        'timeout': arg('timeout'),
+        'slave_address': arg('slave_address'),
+        'position_mode_speed_register': arg('position_mode_speed_register'),
+        'target_force_percent': arg('target_force_percent'),
+        'gripper_closed_position': arg('gripper_closed_position'),
     })
     urdf = document.toxml()
     for mesh in ET.fromstring(urdf).iter('mesh'):
@@ -94,6 +101,7 @@ def start(context):
 
     jsb = spawner('joint_state_broadcaster')
     arm = spawner('fairino3_controller', inactive=not execute)
+    gripper = spawner('tg9801_gripper_controller', inactive=not execute)
     move_group = Node(package='moveit_ros_move_group', executable='move_group',
                       parameters=[moveit], output='screen')
     rviz = Node(package='rviz2', executable='rviz2',
@@ -111,7 +119,9 @@ def start(context):
         RegisterEventHandler(OnProcessExit(target_action=jsb,
             on_exit=success([arm], 'joint_state_broadcaster'))),
         RegisterEventHandler(OnProcessExit(target_action=arm,
-            on_exit=success([move_group, rviz], 'fairino3_controller'))),
+            on_exit=success([gripper], 'fairino3_controller'))),
+        RegisterEventHandler(OnProcessExit(target_action=gripper,
+            on_exit=success([move_group, rviz], 'tg9801_gripper_controller'))),
     ]
     for process in (manager, rsp, move_group):
         handlers.append(RegisterEventHandler(OnProcessExit(target_action=process,
@@ -132,5 +142,12 @@ def generate_launch_description():
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('cell', default_value=str(share/'config/cell.yaml')),
         DeclareLaunchArgument('real_config', default_value=str(share/'config/real.example.yaml')),
+        DeclareLaunchArgument('serial_port', default_value='/dev/ttyACM0'),
+        DeclareLaunchArgument('baud_rate', default_value='1000000'),
+        DeclareLaunchArgument('timeout', default_value='1000'),
+        DeclareLaunchArgument('slave_address', default_value='1'),
+        DeclareLaunchArgument('position_mode_speed_register', default_value='1000'),
+        DeclareLaunchArgument('target_force_percent', default_value='50'),
+        DeclareLaunchArgument('gripper_closed_position', default_value='0.1'),
         OpaqueFunction(function=start),
     ])
