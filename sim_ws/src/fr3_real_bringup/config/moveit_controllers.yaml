@@ -8,7 +8,7 @@ moveit_simple_controller_manager:
     default: true
     joints: [j1, j2, j3, j4, j5, j6]
   tg9801_gripper_controller:
-    type: FollowJointTrajectory
-    action_ns: follow_joint_trajectory
+    type: GripperCommand
+    action_ns: command
     default: false
     joints: [gripper_joint]

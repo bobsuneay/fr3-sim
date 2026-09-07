@@ -62,6 +62,7 @@ which python3 应显示 /usr/bin/python3。若显示 Conda 路径，关闭终端
       ros-humble-ros2-control ros-humble-ros2-controllers \
       ros-humble-controller-manager ros-humble-joint-state-broadcaster \
       ros-humble-joint-trajectory-controller \
+      ros-humble-gripper-controllers \
       ros-humble-forward-command-controller ros-humble-kdl-parser \
       ros-humble-moveit-kinematics ros-humble-moveit-planners \
       ros-humble-moveit-ros-move-group ros-humble-moveit-ros-visualization
@@ -201,20 +202,21 @@ RViz 中 Fixed Frame 设置为 world，规划组选择 fairino3_v6_group，先 P
 
     ros2 control list_controllers
     ros2 control list_hardware_interfaces
-    ros2 action list -t | grep follow_joint_trajectory
+    ros2 action list -t | grep -E 'follow_joint_trajectory|tg9801_gripper_controller/command'
     ros2 run fr3_real_bringup check_feedback --seconds 5
 
 应看到：
 
     /fairino3_controller/follow_joint_trajectory
-    /tg9801_gripper_controller/follow_joint_trajectory
+    /tg9801_gripper_controller/command
 
 MoveIt 规划组：
 
 - fairino3_v6_group：FR3 六轴；
 - gripper：HKV 的 gripper_joint。
 
-HKV 的 gripper_joint 当前命令范围是 0 到 0.1 m；实际物理净开口需要现场标定。
+HKV 的 gripper_joint 当前命令范围是 0 到 0.1 m，并通过 Humble 的
+position_controllers/GripperActionController 提供 GripperCommand action；实际物理净开口需要现场标定。
 
 ## 8. 安装 HKV 夹爪驱动
 

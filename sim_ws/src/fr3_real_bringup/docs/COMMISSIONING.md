@@ -101,7 +101,8 @@ RViz Stop、Ctrl+C、杀进程和断网都不是急停。
 ## 8. HKV 夹爪控制
 
 当前包已经将 HKV 接入 MoveIt：规划组 `gripper` 只有 `gripper_joint`，
-MoveIt 控制器为 `tg9801_gripper_controller/follow_joint_trajectory`。
+控制器是 Humble 的 `position_controllers/GripperActionController`，MoveIt action 为
+`tg9801_gripper_controller/command`，类型是 `control_msgs/action/GripperCommand`。
 夹爪不是 FR3 的第七轴；一个 controller_manager 中同时加载 FR3 和 HKV 两个硬件组件。
 
 先确认夹爪串口、波特率、从站地址、开合方向、激活行为、实际行程和反馈换算：
@@ -131,14 +132,17 @@ controller_manager 中；只 source 这个工作空间即可。
 
     ros2 control list_controllers
     ros2 control list_hardware_interfaces
-    ros2 action list -t | rg 'follow_joint_trajectory'
+    ros2 action list -t | rg 'command'
 
-应该同时看到 `fairino3_controller` 和 `tg9801_gripper_controller`，并有两个
-FollowJointTrajectory action。MoveIt 中选择 `gripper` 规划组即可规划开合。
+应该同时看到 `fairino3_controller` 和 `tg9801_gripper_controller`；FR3 使用
+FollowJointTrajectory，HKV 使用 GripperCommand。MoveIt 中选择 `gripper` 规划组即可规划开合。
 
+Humble 的专用控制器负责单自由度夹爪的目标位置、容差、停滞判断和 GripperCommand
+action；它不是完整的双指力控器。你提供的 HKV 硬件插件只导出 position 命令接口，
+`max_effort` 不会自动变成硬件力控；当前夹持力由 `target_force_percent` 参数固定设置。
+若需要每次目标动态设置力，必须修改 HKV 硬件插件/控制器接口，不能仅修改 MoveIt YAML。
 HKV 文档定义 `gripper_joint` 的 0 到 0.1 m 为开度命令，但实际机械净间距、
-寄存器方向和闭合力仍需你现场验证。首次只执行很小的开度变化，确认手指方向和
-急停；不要把 0/0.1 直接当作已标定的物理间距。
+寄存器方向和闭合力仍需你现场验证。首次只执行很小的开度变化，确认手指方向和急停。
 
 如果夹爪驱动激活失败，先单独按 ros2_hkv_gripper 的说明验证串口，再启动本包。
 不要同时启动该包自带的第二个 controller_manager，否则会争用同一夹爪串口和

@@ -3,8 +3,9 @@
 本目录是独立 ROS 2 Humble 包：桌面正装 FR3、HKV TG-9801 平行夹爪和 MoveIt 2。
 原有 fr3_bolt_cell 保持不变。本包不启动 Gazebo，不包含螺栓、相机或侧装立柱。
 
-HKV 通过独立的 `gripper_joint` 加入 MoveIt 规划组，并由独立的
-`tg9801_gripper_controller` 控制。它不会作为第七轴传给 FR3 硬件插件。
+HKV 通过独立的 `gripper_joint` 加入 MoveIt 规划组，并由 Humble 的专用
+`position_controllers/GripperActionController` 控制。MoveIt 使用 `GripperCommand`
+action。它不会作为第七轴传给 FR3 硬件插件。
 mock 模式使用虚拟夹爪，real 模式使用你提供的 `ros2_hkv_gripper` 串口插件。
 六轴 FR3 仍通过 `fairino_hardware/FairinoHardwareInterface` 接入。
 
@@ -30,7 +31,7 @@ MoveIt 规划组是 fairino3_v6_group，末端是 gripper_tcp。mock 模式只�
 - config/real.example.yaml：真机人工验收配置
 - launch/mock.launch.py：虚拟完整链路
 - launch/bringup.launch.py：mock/real 通用入口
-- config/controllers.yaml：FR3 和 HKV 两个独立轨迹控制器
+- config/controllers.yaml：FR3 轨迹控制器和 HKV 专用夹爪控制器
 - docs/VALIDATION.md：当前验证范围
 
 新编写代码为 MIT；第三方 FR3/HKV 网格的来源和许可见 THIRD_PARTY.md。

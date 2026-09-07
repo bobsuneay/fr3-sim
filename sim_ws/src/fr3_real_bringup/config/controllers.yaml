@@ -6,7 +6,7 @@ controller_manager:
     fairino3_controller:
       type: joint_trajectory_controller/JointTrajectoryController
     tg9801_gripper_controller:
-      type: joint_trajectory_controller/JointTrajectoryController
+      type: position_controllers/GripperActionController
 fairino3_controller:
   ros__parameters:
     joints: [j1, j2, j3, j4, j5, j6]
@@ -26,12 +26,10 @@ fairino3_controller:
 
 tg9801_gripper_controller:
   ros__parameters:
-    joints: [gripper_joint]
-    command_interfaces: [position]
-    state_interfaces: [position, velocity]
-    state_publish_rate: 50.0
+    joint: gripper_joint
     action_monitor_rate: 20.0
-    allow_partial_joints_goal: false
-    constraints:
-      goal_time: 1.0
-      gripper_joint: {trajectory: 0.005, goal: 0.002}
+    goal_tolerance: 0.002
+    max_effort: 0.0
+    allow_stalling: true
+    stall_velocity_threshold: 0.001
+    stall_timeout: 1.0
