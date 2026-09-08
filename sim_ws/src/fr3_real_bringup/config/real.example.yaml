@@ -1,6 +1,6 @@
 # Intentionally incomplete: do not set confirmations without checking hardware.
 firmware_version: ""
-driver_package: ""          # e.g. fairino_hardware_v3_9_9 ONLY if confirmed compatible
+driver_package: ""          # e.g. fairino_hardware_v3_9_7 ONLY if confirmed compatible
 controller_ip: ""           # actual robot address; used for consistency checks below
 driver_configured_ip: ""    # address verified in the installed driver/source
 update_rate: 100            # verify against selected driver's ServoJ period

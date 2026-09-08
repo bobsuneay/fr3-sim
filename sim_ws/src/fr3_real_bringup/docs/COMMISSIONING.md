@@ -55,6 +55,53 @@ fairino_hardware_v3_* 版本。选定版本后：
     file path/to/libfairino*.so
     ldd path/to/libfairino*.so
 
+### 4.1 你提供的 v3.0.0_robotV3.9.7 压缩包
+
+你提供的目录包含以下几类包：
+
+- `fairino_msgs`：法奥消息/服务接口，必须编译；
+- `fairino_hardware`：版本识别/命令服务包，不是当前版本的 ros2_control 硬件插件主体；
+- `fairino_hardware_v3_9_7`：当前目录中真正导出
+  `fairino_hardware/FairinoHardwareInterface` 的版本化 ros2_control 插件；
+- `fairino_description`：官方机器人外观和 URDF；
+- `fairino3_v6_moveit2_config`：官方 FR3 MoveIt 2 配置。
+
+如果 FR3 控制柜软件确实是 3.9.7，可把 `fairino_msgs` 和
+`fairino_hardware_v3_9_7` 放入一个单独的驱动工作空间：
+
+    mkdir -p ~/fr3_driver_ws/src
+    cp -a /path/to/frcobot_ros2-v3.0.0_robotV3.9.7/fairino_msgs ~/fr3_driver_ws/src/
+    cp -a /path/to/frcobot_ros2-v3.0.0_robotV3.9.7/fairino_hardware_v3_9_7 ~/fr3_driver_ws/src/
+    source /opt/ros/humble/setup.bash
+    cd ~/fr3_driver_ws
+    rosdep install --from-paths src --ignore-src -r -y
+    colcon build --symlink-install --packages-up-to fairino_hardware_v3_9_7
+    source install/setup.bash
+
+`fairino_hardware` 可以额外编译，用于官方版本识别/命令服务，但它不是
+`fr3_real_bringup` 加载的硬件插件本体：
+
+    colcon build --symlink-install --packages-select fairino_hardware
+
+不要把 `fairino_hardware_v3_9_0`、`fairino_hardware_v3_9_7`、`fairino_hardware_v3_9_9`
+等多个版本同时编译并 source。它们可能导出同名的
+`fairino_hardware/FairinoHardwareInterface`，会造成插件歧义或加载到错误版本。
+
+对当前 `fr3_real_bringup`，不需要编译官方 `fairino_description` 和
+`fairino3_v6_moveit2_config`，因为本包已经安装自己的 FR3 URDF、网格、SRDF 和 MoveIt 配置。
+只有启动官方 `fairino3_v6_moveit2_config` 时，才需要编译并 source 这两个官方包。
+
+确认插件确实来自选定版本：
+
+    ros2 pkg prefix fairino_hardware_v3_9_7
+    ros2 pkg prefix fairino_msgs
+    rg -n 'FairinoHardwareInterface|CONTROLLER_IP_ADDRESS|ServoJ|GetActualJointPosDegree' \
+      ~/fr3_driver_ws/src/fairino_hardware_v3_9_7
+
+该压缩包的 v3.9.7 头文件使用默认控制柜地址 `192.168.58.2`。如果现场 IP 不同，
+先按厂商允许的方式修改驱动源码/配置并重新编译；仅修改
+`fr3_real_bringup/config/real.yaml` 中的 `controller_ip` 不一定会改变插件实际连接地址。
+
 ## 5. 填写真机门槛配置
 
     mkdir -p ~/fr3_config
