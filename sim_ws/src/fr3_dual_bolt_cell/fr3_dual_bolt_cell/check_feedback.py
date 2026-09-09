@@ -38,11 +38,11 @@ def main():
             rclpy.spin_once(node, timeout_sec=.1)
             required = {j for j in expected if not j.endswith('_gripper_joint')}
             if all(time.monotonic()-seen.get(j, -1e20) < 1 and counts.get(j, 0) >= 5 for j in required):
-                node.get_logger().info('PASS: all 14 commanded joints have repeated fresh finite feedback')
+                node.get_logger().info(f'PASS: all {len(required)} commanded joints have repeated fresh finite feedback')
                 return
         raise RuntimeError('Missing/stale feedback: '+str(sorted(
             j for j in expected if not j.endswith('_gripper_joint') and
-            (time.monotonic()-seen.get(j, -1e20) >= 1 or counts.get(j, 0) < 5)))
+            (time.monotonic()-seen.get(j, -1e20) >= 1 or counts.get(j, 0) < 5))))
     finally:
         node.destroy_subscription(subscription)
         node.destroy_node()

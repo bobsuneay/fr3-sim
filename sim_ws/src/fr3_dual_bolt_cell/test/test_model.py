@@ -160,3 +160,10 @@ def test_single_table_and_twenty_dynamic_bolts():
 
 def test_unknown_mode_rejected(arms):
     with pytest.raises(ValueError): model(arms, 'gazbeo')
+
+
+def test_all_installed_python_sources_parse():
+    import ast
+    for folder in ('fr3_dual_bolt_cell', 'launch', 'tools'):
+        for source in (SHARE/folder).rglob('*.py'):
+            ast.parse(source.read_text(encoding='utf-8'), filename=str(source))

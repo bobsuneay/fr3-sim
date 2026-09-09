@@ -3,16 +3,17 @@
 left:
   xyz: [0.0, 0.10, 1.10]
   rpy: [-1.5707963267948966, 0.0, 0.0]
-  # Mirror of right.initial across the YZ plane. This tucked pose keeps the
-  # wrist/hand in front of the upper arm at startup.
-  initial: [-1.57079632679, -1.0, -2.3, -0.2, -0.2, -0.6]
+  # Body sagittal plane: Y=0 (XZ plane), so (x,y,z) -> (x,-y,z).
+  # Same physical FR3 geometry, no reflected meshes or altered joint axes.
+  # qL = [pi-qR1, -pi-qR2, -qR3, -pi-qR4, -qR5, -qR6].
+  initial: [1.5707963267948966, -1.2415926535897932, -1.5, -1.7415926535897932, 0.3, 0.0]
 right:
   xyz: [0.0, -0.10, 1.10]
   rpy: [1.5707963267948966, 0.0, 0.0]
-  initial: [1.57079632679, -1.0, -2.3, -0.2, 0.2, 0.6]
+  initial: [1.5707963267948966, -1.9, 1.5, -1.4, -0.3, 0.0]
 gripper:
-  # q = each finger's inward travel. gap = open_gap - 2*q.
-  # 0=open, increasing q=close, consistent with HKV normalized direction.
+  # Simulation convention inherited from fr3_bolt_cell: q increases outward.
+  # This is not the real HKV driver's normalised closure command.
   open_gap: 0.060
   finger_travel: 0.050
   flange_xyz: [0.0, 0.0, 0.10]

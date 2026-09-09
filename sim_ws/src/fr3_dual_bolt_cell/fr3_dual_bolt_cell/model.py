@@ -95,6 +95,9 @@ def box(link, size, xyz=(0, 0, 0), visual=False):
     block = element(link, 'visual' if visual else 'collision')
     element(block, 'origin', xyz=numbers(xyz))
     element(element(block, 'geometry'), 'box', size=numbers(size))
+    if visual:
+        material = element(block, 'material', name=link.get('name')+'_metal')
+        element(material, 'color', rgba='0.35 0.38 0.40 1')
 
 
 def mesh(link, name, xyz=(0, 0, 0), yaw=0):
@@ -102,6 +105,9 @@ def mesh(link, name, xyz=(0, 0, 0), yaw=0):
     element(block, 'origin', xyz=numbers(xyz), rpy=f'0 0 {yaw}')
     element(element(block, 'geometry'), 'mesh',
             filename=f'package://{PACKAGE}/meshes/hkv_tg9801/{name}.stl', scale='.001 .001 .001')
+    material = element(block, 'material', name=link.get('name')+'_'+name+'_material')
+    color = '0.1882 0.1882 0.1882 1' if name in ('base_body', 'finger') else '0.68 0.70 0.72 1'
+    element(material, 'color', rgba=color)
 
 
 def add_gripper(root, side, cfg):
@@ -114,9 +120,8 @@ def add_gripper(root, side, cfg):
     mesh(palm, 'flange')
     mesh(palm, 'base_body', (0, 0, .0615))
     mesh(palm, 'rail_155', (0, 0, .067))
-    # Collision primitives match the original fr3_bolt_cell HKV model. The
-    # long body runs along X; using Y as the long axis makes the flange overlap
-    # the wrist and causes MoveIt to paint the connection red.
+    # Match the original HKV collision primitives. Display material is handled
+    # separately: missing URDF materials fall back to RVIZ/ShadedRed.
     box(palm, (.16, .0705, .0615), (0, .00325, .03075))
     box(palm, (.155, .007, .0048), (0, 0, .0694))
     fixed(root, p+'tool_to_gripper', p+'tool0', p+'gripper_palm')
