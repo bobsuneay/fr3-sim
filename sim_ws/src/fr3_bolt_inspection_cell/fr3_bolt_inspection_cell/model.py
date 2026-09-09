@@ -9,6 +9,11 @@ def augment(root, cfg, sim):
     validate(cfg)
     root.set('name', 'fr3_bolt_inspection_cell')
     for side in ('left', 'right'):
+        # The baseline keeps tool0 as a massless coordinate frame. Gazebo can
+        # reliably preserve this fixed joint only when both links have inertia.
+        tool = root.find(f"link[@name='{side}_tool0']")
+        if tool.find('inertial') is None:
+            inertial(tool, .01, (.02, .02, .01))
         # Keep the HKV palm/rail; substitute explicit narrow inspection jaws.
         for which, sign in (('left', -1), ('right', 1)):
             name = f'{side}_{which}_finger'
@@ -29,8 +34,12 @@ def augment(root, cfg, sim):
         tcp.set('xyz', '0 0 .149')
         # The simulator grasp plugin attaches to this physical palm frame.
         if sim:
-            g = element(root, 'gazebo', reference=side+'_tool_to_gripper')
-            element(g, 'preserveFixedJoint').text = 'true'
+            # Gazebo's URDF importer otherwise reduces the wrist/tool/palm fixed
+            # chain. On Gazebo 11 that can also discard the downstream finger
+            # joints before gazebo_ros2_control discovers them.
+            for joint in (side+'_wrist_to_tool', side+'_tool_to_gripper'):
+                g = element(root, 'gazebo', reference=joint)
+                element(g, 'preserveFixedJoint').text = 'true'
     for name, c in cfg['cameras'].items():
         if name == 'waist_camera':
             bracket_xyz, bracket_size = (.068, 0, 1.22), (.035, .015, .015)
@@ -77,6 +86,19 @@ def augment(root, cfg, sim):
         element(plugin, 'frame_name').text = name+'_optical_frame'
         element(plugin, 'min_depth').text = str(c['near'])
         element(plugin, 'max_depth').text = str(c['far'])
+    if sim:
+        # gazebo_ros2_control Humble declares plugin-wide parameters (including
+        # hold_joints) for every <ros2_control> block. A dual block therefore
+        # emits a duplicate-parameter error. Both arms use the same GazeboSystem,
+        # so expose all 16 joints through one hardware block.
+        systems = root.findall('ros2_control')
+        if len(systems) != 2:
+            raise ValueError('Expected one Gazebo ros2_control system per arm')
+        combined = systems[0]
+        combined.set('name', 'inspection_gazebo_system')
+        for joint in systems[1].findall('joint'):
+            combined.append(joint)
+        root.remove(systems[1])
     return root
 
 

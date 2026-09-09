@@ -113,6 +113,18 @@ def test_camera_frames_materials_and_backends():
         assert plugins.count('libgazebo_ros_camera.so') == (4 if mode == 'gazebo' else 0)
         for joint in root.findall('ros2_control/joint'):
             assert root.find(f"joint[@name='{joint.get('name')}']") is not None
+        systems = root.findall('ros2_control')
+        assert len(systems) == (1 if mode == 'gazebo' else 4)
+        if mode == 'gazebo':
+            controlled = {j.get('name') for j in systems[0].findall('joint')}
+            assert len(controlled) == 16
+            for side in ('left', 'right'):
+                assert root.find(
+                    f"gazebo[@reference='{side}_wrist_to_tool']/preserveFixedJoint") is not None
+                assert root.find(
+                    f"gazebo[@reference='{side}_tool_to_gripper']/preserveFixedJoint") is not None
+                tool = root.find(f"link[@name='{side}_tool0']/inertial")
+                assert tool is not None and float(tool.find('mass').get('value')) > 0
 
 
 def test_camera_aims_at_part_and_has_realistic_standoff():

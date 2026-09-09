@@ -42,6 +42,26 @@ colcon test --packages-select fr3_bolt_inspection_cell
 colcon test-result --verbose
 ```
 
+如果是从 2026-09-09 首次版本更新（日志中出现 `Skipping joint ... finger_joint` 或
+`inspection_task not found`），先清掉这个包的旧构建产物再重建：
+
+```bash
+cd ~/fr3-sim
+git pull
+cd sim_ws
+rm -rf build/fr3_bolt_inspection_cell install/fr3_bolt_inspection_cell
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-up-to fr3_bolt_inspection_cell
+source install/setup.bash
+ros2 launch fr3_bolt_inspection_cell bringup.launch.py mode:=gazebo enable_execution:=true
+```
+
+不要删除整个 `install` 目录；上述命令只清理新功能包。更新后可先确认两个入口存在：
+
+```bash
+ls -l install/fr3_bolt_inspection_cell/lib/fr3_bolt_inspection_cell/
+```
+
 先预览模型，不执行任务：
 
 ```bash
