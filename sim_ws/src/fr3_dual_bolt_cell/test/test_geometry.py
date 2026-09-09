@@ -90,6 +90,22 @@ def test_initial_pose_clear_of_table_ground_and_opposite_arm():
                     assert not overlap(lb, rb), (left, right)
 
 
+def test_initial_pose_is_mirrored_and_grippers_clear_of_upper_arms():
+    arms = read_yaml(SHARE/'config/arms.yaml')
+    assert arms['left']['initial'][0] == -arms['right']['initial'][0]
+    assert arms['left']['initial'][1] == arms['right']['initial'][1]
+    assert arms['left']['initial'][2] == arms['right']['initial'][2]
+    assert arms['left']['initial'][3] == arms['right']['initial'][3]
+    assert arms['left']['initial'][4] == -arms['right']['initial'][4]
+    assert arms['left']['initial'][5] == -arms['right']['initial'][5]
+    root = build_model(SHARE, SHARE/'config/scene.yaml', arms, 'mock')
+    boxes = bounds(root, arms)
+    for side in ('left', 'right'):
+        for arm_link in (f'{side}_upperarm_link', f'{side}_forearm_link'):
+            for gripper_link in (f'{side}_gripper_palm', f'{side}_left_finger', f'{side}_right_finger'):
+                assert not overlap(boxes[arm_link], boxes[gripper_link]), (arm_link, gripper_link)
+
+
 def test_collision_link_inertias_positive():
     arms = read_yaml(SHARE/'config/arms.yaml')
     root = build_model(SHARE, SHARE/'config/scene.yaml', arms, 'gazebo')
