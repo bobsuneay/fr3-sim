@@ -11,8 +11,8 @@ right:
 gripper:
   # q = each finger's inward travel. gap = open_gap - 2*q.
   # 0=open, increasing q=close, consistent with HKV normalized direction.
-  open_gap: 0.030
-  finger_travel: 0.015
+  open_gap: 0.060
+  finger_travel: 0.050
   flange_xyz: [0.0, 0.0, 0.10]
   flange_rpy: [0.0, 0.0, 0.0]
   tcp_xyz: [0.0, 0.0, 0.145]

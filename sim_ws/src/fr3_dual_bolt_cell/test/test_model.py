@@ -73,11 +73,12 @@ def test_backend_isolation_and_interfaces(arms, hardware, mode):
             assert component.find("hardware/param[@name='robot_ip']").text == hardware[side]['robot_ip']
             assert all(len(j.findall('state_interface')) == 1 for j in component.findall('joint'))
             assert not component.findall('.//param[@name="initial_value"]')
-    for side in ('left', 'right'):
-        command = root.find(f".//ros2_control/joint[@name='{side}_gripper_joint']")
-        assert {s.get('name') for s in command.findall('state_interface')} == {'position', 'velocity'}
-        mimic = root.find(f"joint[@name='{side}_finger_mimic_joint']/mimic")
-        assert mimic.get('joint') == side+'_gripper_joint'
+        for side in ('left', 'right'):
+            for finger in ('left', 'right'):
+                joint_name = f'{side}_{finger}_finger_joint' if mode != 'real' else f'{side}_gripper_joint'
+                command = root.find(f".//ros2_control/joint[@name='{joint_name}']")
+                expected = {'position', 'velocity'} if mode != 'real' else {'position', 'velocity'}
+            assert {s.get('name') for s in command.findall('state_interface')} == expected
 
 
 def test_real_manager_separation(arms, hardware):
@@ -105,26 +106,25 @@ def test_moveit_has_both_arms_and_preserves_interarm_collisions(arms):
     for name in mapping['controller_names']:
         assert name in controllers('gazebo')
         assert name in controllers('real', name.split('_')[0])
-    assert len(config['robot_description_planning']['joint_limits']) == 14
+    assert len(config['robot_description_planning']['joint_limits']) == 16
 
 
 def test_gripper_width_mapping_and_physical_gap(arms):
     g = arms['gripper']
-    assert target_for_width(g['open_gap'], arms) == 0
-    assert target_for_width(0, arms) == g['finger_travel']
-    assert target_for_width(.01, arms) == pytest.approx(.01)
+    assert target_for_width(g['open_gap'], arms) == pytest.approx(g['open_gap']/2)
+    assert target_for_width(0, arms) == 0
+    assert target_for_width(.01, arms) == pytest.approx(.005)
     root = model(arms)
     for side in ('left', 'right'):
-        a = root.find(f"joint[@name='{side}_gripper_joint']")
-        b = root.find(f"joint[@name='{side}_finger_mimic_joint']")
-        x1 = float(a.find('origin').get('xyz').split()[0])
-        x2 = float(b.find('origin').get('xyz').split()[0])
-        assert x2-x1-.008 == pytest.approx(g['open_gap'])
-        assert a.find('axis').get('xyz') == '1 0 0'
-        assert b.find('axis').get('xyz') == '-1 0 0'
+        left = root.find(f"joint[@name='{side}_left_finger_joint']")
+        right = root.find(f"joint[@name='{side}_right_finger_joint']")
+        assert left.find('origin').get('xyz').split()[0] == '-0.01545'
+        assert right.find('origin').get('xyz').split()[0] == '0.01545'
+        assert left.find('axis').get('xyz') == '-1 0 0'
+        assert right.find('axis').get('xyz') == '1 0 0'
 
 
-@pytest.mark.parametrize('width', [-.001, .031, math.nan, math.inf])
+@pytest.mark.parametrize('width', [-.001, .061, math.nan, math.inf])
 def test_bad_width_is_rejected(arms, width):
     with pytest.raises(ValueError):
         target_for_width(width, arms)

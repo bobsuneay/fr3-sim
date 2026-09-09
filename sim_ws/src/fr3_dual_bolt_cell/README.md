@@ -72,8 +72,8 @@ ros2 run fr3_dual_bolt_cell gripper --arm right --width 0.010
 ```
 
 `--width` 是内侧净开口，单位米；默认范围 0～30 mm。
-内部关节值 `q=(open_gap-width)/2` 是单指向内行程，0 为张开、0.015 为闭合。
-两指相向运动，仿真和实机方向一致。不要照搬原夹爪示例的 `0.1` 指令。
+内部关节值沿用原 `fr3_bolt_cell`：`q=width/2`，0 为闭合、0.03 为 60 mm 张开。
+两指分别由同一个轨迹 action 命令，仿真和原包方向一致。不要照搬实机 HKV 寄存器的 `0.1` 指令。
 夹爪 CAD 只用于外观，碰撞体、质量、开口、TCP 是可调整的近似值，需现场测量。
 实机夹持力使用硬件配置的 `target_force_percent`；位置控制器的 action `max_effort`
 不能当作已标定的实际夹持力。action 返回 stalled 也不证明成功夹住工件。

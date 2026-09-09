@@ -33,8 +33,8 @@ def validate_arms(cfg):
     g = cfg['gripper']
     for key in ('flange_xyz', 'flange_rpy', 'tcp_xyz', 'tcp_rpy'):
         vector(g[key], 3, key)
-    if not (0 < g['finger_travel'] <= g['open_gap']/2 <= 0.05):
-        raise ValueError('Require 0 < finger_travel <= open_gap/2 <= 0.05 m')
+    if not (0 < g['open_gap']/2 <= g['finger_travel'] <= 0.05):
+        raise ValueError('Require 0 < open_gap/2 <= finger_travel <= 0.05 m')
     if cfg['left']['xyz'] == cfg['right']['xyz']:
         raise ValueError('Both bases cannot occupy the same position')
     return cfg
@@ -116,9 +116,14 @@ def add_gripper(root, side, cfg):
     mesh(palm, 'rail_155', (0, 0, .067))
     box(palm, (.06, .155, .065), (0, 0, .0325))
     fixed(root, p+'tool_to_gripper', p+'tool0', p+'gripper_palm')
+    # Keep the same convention as fr3_bolt_cell: q=0 is closed and q=0.05 m
+    # is open. Both prismatic joints are commanded independently by the
+    # JointTrajectoryController; this is more reliable in Gazebo than relying
+    # on a mimic joint in ros2_control.
     for index, sign in enumerate((-1, 1)):
-        link_name = p+('finger_a' if index == 0 else 'finger_b')
-        joint_name = p+('gripper_joint' if index == 0 else 'finger_mimic_joint')
+        finger = 'left' if index == 0 else 'right'
+        link_name = p+finger+'_finger'
+        joint_name = p+finger+'_finger_joint'
         link = element(root, 'link', name=link_name)
         inertial(link, .08, (.008, .018, .07), (0, 0, .04))
         mesh(link, 'slider')
@@ -128,12 +133,10 @@ def add_gripper(root, side, cfg):
         joint = element(root, 'joint', name=joint_name, type='prismatic')
         element(joint, 'parent', link=p+'gripper_palm')
         element(joint, 'child', link=link_name)
-        element(joint, 'origin', xyz=f'{sign*(g["open_gap"]/2+.004)} 0 .067')
-        element(joint, 'axis', xyz=f'{-sign} 0 0')
-        element(joint, 'limit', lower=0, upper=g['finger_travel'], effort=30, velocity=.015)
-        element(joint, 'dynamics', damping=1, friction=.05)
-        if index:
-            element(joint, 'mimic', joint=p+'gripper_joint', multiplier=1, offset=0)
+        element(joint, 'origin', xyz=f'{sign*0.01545} 0 .067')
+        element(joint, 'axis', xyz=f'{sign} 0 0')
+        element(joint, 'limit', lower=0, upper=0.05, effort=100, velocity=0.10)
+        element(joint, 'dynamics', damping=2.0, friction=.10)
         surface = element(root, 'gazebo', reference=link_name)
         element(surface, 'selfCollide').text = 'true'
         for tag, value in (('mu1', 1), ('mu2', 1), ('kp', 100000), ('kd', 10)):
@@ -152,7 +155,7 @@ def control(root, name, plugin, joints, initial=None, parameters=None, mimic=Non
         joint = element(system, 'joint', name=name)
         element(joint, 'command_interface', name='position')
         state = element(joint, 'state_interface', name='position')
-        if 'gripper_joint' in name or 'finger_mimic_joint' in name:
+        if 'finger_joint' in name or 'gripper_joint' in name:
             element(joint, 'state_interface', name='velocity')
         if initial is not None:
             element(state, 'param', name='initial_value').text = str(initial.get(name, 0))
@@ -210,9 +213,10 @@ def build_model(share, scene_file, arms, mode, controller_file='', hardware=None
         arm_joints = [f'{side}_j{i}' for i in range(1, 7)]
         grip = side+'_gripper_joint'
         follower = side+'_finger_mimic_joint'
+        finger_joints = [f'{side}_left_finger_joint', f'{side}_right_finger_joint']
         if mode == 'gazebo':
             control(root, side+'_system', 'gazebo_ros2_control/GazeboSystem',
-                    arm_joints+[grip, follower], initial, mimic={follower: grip})
+                    arm_joints+finger_joints, initial)
         else:
             control(root, side+'_arm_system', 'mock_components/GenericSystem' if mode == 'mock'
                     else 'fairino_hardware/FairinoHardwareInterface', arm_joints,
@@ -221,8 +225,9 @@ def build_model(share, scene_file, arms, mode, controller_file='', hardware=None
             params = {} if mode == 'mock' else {
                 **hardware['gripper'], 'serial_port': hardware[side]['serial_port'],
                 'gripper_closed_position': arms['gripper']['finger_travel']}
+            real_gripper_joints = [grip] if mode == 'real' else finger_joints
             control(root, side+'_gripper_system', 'mock_components/GenericSystem' if mode == 'mock'
-                    else 'ros2_hkv_gripper/GripperHardwareInterface', [grip],
+                    else 'ros2_hkv_gripper/GripperHardwareInterface', real_gripper_joints,
                     {} if mode == 'mock' else None, params)
     if mode == 'gazebo':
         plugin = element(element(root, 'gazebo'), 'plugin', name='gazebo_ros2_control',
@@ -249,19 +254,22 @@ def controllers(mode, side=None):
         names = (arm+'_joint_state_broadcaster', arm+'_arm_controller', arm+'_gripper_controller')
         for name, kind in zip(names, ('joint_state_broadcaster/JointStateBroadcaster',
                                       'joint_trajectory_controller/JointTrajectoryController',
-                                      'position_controllers/GripperActionController')):
+                                      'joint_trajectory_controller/JointTrajectoryController')):
             params[name] = {'type': kind}
         result[names[0]] = {'ros__parameters': {
-            'joints': [f'{arm}_j{i}' for i in range(1, 7)]+[arm+'_gripper_joint'],
+            'joints': [f'{arm}_j{i}' for i in range(1, 7)] +
+                      [arm+'_left_finger_joint', arm+'_right_finger_joint'],
             'interfaces': ['position'], 'use_local_topics': False}}
         result[names[1]] = {'ros__parameters': {
             'joints': [f'{arm}_j{i}' for i in range(1, 7)],
             'command_interfaces': ['position'], 'state_interfaces': ['position'],
             'allow_partial_joints_goal': False, 'state_publish_rate': 50.0,
             'constraints': {'goal_time': 2.0, 'stopped_velocity_tolerance': 0.05}}}
-        result[names[2]] = {'ros__parameters': {'joint': arm+'_gripper_joint',
-            'goal_tolerance': 0.0005, 'max_effort': 30.0, 'allow_stalling': True,
-            'stall_velocity_threshold': 0.001, 'stall_timeout': 1.0}}
+        result[names[2]] = {'ros__parameters': {
+            'joints': [arm+'_left_finger_joint', arm+'_right_finger_joint'],
+            'command_interfaces': ['position'], 'state_interfaces': ['position', 'velocity'],
+            'state_publish_rate': 30.0, 'action_monitor_rate': 20.0,
+            'allow_partial_joints_goal': False}}
     return result
 
 
@@ -271,15 +279,17 @@ def semantic(root, arms):
         group = element(srdf, 'group', name=side+'_arm')
         element(group, 'chain', base_link=side+'_base_link', tip_link=side+'_gripper_tcp')
         group = element(srdf, 'group', name=side+'_gripper')
-        element(group, 'joint', name=side+'_gripper_joint')
+        element(group, 'joint', name=side+'_left_finger_joint')
+        element(group, 'joint', name=side+'_right_finger_joint')
         element(srdf, 'end_effector', name=side+'_hkv', parent_link=side+'_gripper_palm',
                 group=side+'_gripper', parent_group=side+'_arm')
         ready = element(srdf, 'group_state', name='ready', group=side+'_arm')
         for i, v in enumerate(arms[side]['initial'], 1):
             element(ready, 'joint', name=f'{side}_j{i}', value=v)
-        for name, q in (('open', 0), ('closed', max(0, arms['gripper']['finger_travel']-.00025))):
+        for name, q in (('closed', .00025), ('open', arms['gripper']['open_gap']/2)):
             state = element(srdf, 'group_state', name=name, group=side+'_gripper')
-            element(state, 'joint', name=side+'_gripper_joint', value=q)
+            element(state, 'joint', name=side+'_left_finger_joint', value=q)
+            element(state, 'joint', name=side+'_right_finger_joint', value=q)
         element(srdf, 'disable_collisions', link1=side+'_wrist3_link',
                 link2=side+'_gripper_palm', reason='Mounting')
         element(srdf, 'disable_collisions', link1=side+'_mount_plate',
@@ -310,7 +320,8 @@ def moveit_config(root, arms, share):
         for suffix, kind, action, joints in (
                 ('arm_controller', 'FollowJointTrajectory', 'follow_joint_trajectory',
                  [f'{side}_j{i}' for i in range(1, 7)]),
-                ('gripper_controller', 'GripperCommand', 'gripper_cmd', [side+'_gripper_joint'])):
+                ('gripper_controller', 'FollowJointTrajectory', 'follow_joint_trajectory',
+                 [side+'_left_finger_joint', side+'_right_finger_joint'])):
             name = side+'_'+suffix
             mapping['controller_names'].append(name)
             mapping[name] = {'type': kind, 'action_ns': action, 'default': True, 'joints': joints}

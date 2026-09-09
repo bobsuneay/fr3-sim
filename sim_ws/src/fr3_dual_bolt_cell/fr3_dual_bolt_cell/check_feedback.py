@@ -15,7 +15,10 @@ def main():
     if not math.isfinite(opts.timeout) or opts.timeout <= 0:
         parser.error('timeout must be positive and finite')
     expected = {f'{side}_j{i}' for side in ('left', 'right') for i in range(1, 7)}
-    expected |= {'left_gripper_joint', 'right_gripper_joint'}
+    expected |= {'left_left_finger_joint', 'left_right_finger_joint',
+                 'right_left_finger_joint', 'right_right_finger_joint',
+                 # The real HKV hardware exposes one command joint per gripper.
+                 'left_gripper_joint', 'right_gripper_joint'}
     seen = {}
     counts = {}
     rclpy.init()
@@ -33,11 +36,13 @@ def main():
     try:
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=.1)
-            if all(time.monotonic()-seen.get(j, -1e20) < 1 and counts.get(j, 0) >= 5 for j in expected):
+            required = {j for j in expected if not j.endswith('_gripper_joint')}
+            if all(time.monotonic()-seen.get(j, -1e20) < 1 and counts.get(j, 0) >= 5 for j in required):
                 node.get_logger().info('PASS: all 14 commanded joints have repeated fresh finite feedback')
                 return
         raise RuntimeError('Missing/stale feedback: '+str(sorted(
-            j for j in expected if time.monotonic()-seen.get(j, -1e20) >= 1 or counts.get(j, 0) < 5)))
+            j for j in expected if not j.endswith('_gripper_joint') and
+            (time.monotonic()-seen.get(j, -1e20) >= 1 or counts.get(j, 0) < 5)))
     finally:
         node.destroy_subscription(subscription)
         node.destroy_node()
