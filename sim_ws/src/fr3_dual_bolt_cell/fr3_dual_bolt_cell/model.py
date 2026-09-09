@@ -114,7 +114,11 @@ def add_gripper(root, side, cfg):
     mesh(palm, 'flange')
     mesh(palm, 'base_body', (0, 0, .0615))
     mesh(palm, 'rail_155', (0, 0, .067))
-    box(palm, (.06, .155, .065), (0, 0, .0325))
+    # Collision primitives match the original fr3_bolt_cell HKV model. The
+    # long body runs along X; using Y as the long axis makes the flange overlap
+    # the wrist and causes MoveIt to paint the connection red.
+    box(palm, (.16, .0705, .0615), (0, .00325, .03075))
+    box(palm, (.155, .007, .0048), (0, 0, .0694))
     fixed(root, p+'tool_to_gripper', p+'tool0', p+'gripper_palm')
     # Keep the same convention as fr3_bolt_cell: q=0 is closed and q=0.05 m
     # is open. Both prismatic joints are commanded independently by the
@@ -129,7 +133,8 @@ def add_gripper(root, side, cfg):
         mesh(link, 'slider')
         mesh(link, 'finger', (0, 0, .008), 0 if index == 0 else math.pi)
         # Collision inner faces match the configured gap; visual CAD is illustrative.
-        box(link, (.008, .018, .07), (0, 0, .04))
+        box(link, (.024, .017, .0065), (0, 0, .00485))
+        box(link, (.0285, .040, .0717), (0, 0, .04385), visual=False)
         joint = element(root, 'joint', name=joint_name, type='prismatic')
         element(joint, 'parent', link=p+'gripper_palm')
         element(joint, 'child', link=link_name)
