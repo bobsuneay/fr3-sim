@@ -1,0 +1,68 @@
+# Metres, radians. World X forward, Y left, Z up. Stop launch before changing.
+first_arm: right
+cloud_topic: /head_camera/points
+cloud_timeout: 15.0
+max_data_age: 2.0
+roi_min: [0.47, -0.23, 0.721]
+roi_max: [0.53, -0.17, 0.738]
+table_z: 0.72
+cluster_radius: 0.003
+min_points: 20
+max_points: 30000
+bolt_length: 0.025
+shaft_radius: 0.0025
+head_radius: 0.0045
+head_length: 0.004
+grasp_offset: 0.006
+open_width: 0.035
+close_width: 0.004
+approach_height: 0.05
+lift_height: 0.05
+cartesian_step: 0.002
+descent_speed: 0.008
+transfer_speed: 0.025
+scan_speed: 0.015
+joint_speed: 0.12
+joint_acceleration: 0.15
+joint_step_limit: 0.12
+inspection_center: [0.25, 0.0, 1.15]
+handover_center: [0.25, 0.0, 1.15]
+# Each view is reached from neutral and returns to neutral. No accumulating wrist turns.
+views_deg: [[0, 0, 0], [0, 0, -30], [0, 15, 0], [0, -15, 0], [0, 35, 0], [0, -35, 0], [15, 0, 0], [-15, 0, 0], [60, 0, 0], [-60, 0, 0], [120, 0, 0], [-120, 0, 0], [180, 0, 0], [0, 0, 60], [0, 0, -60], [0, 0, 120], [0, 0, -120], [0, 0, 180]]
+minimum_views: 3
+settle_seconds: 0.8
+center_tolerance: 0.003
+angular_tolerance: 0.12
+output_directory: ~/fr3_inspection_runs
+simulation_entity: bolt_00_00
+cameras:
+  waist_camera:
+    parent: support_link
+    xyz: [0.085, 0.0, 1.22]
+    rpy: [0.0, 0.401, 0.0]
+    width: 1280
+    height: 720
+    horizontal_fov: 1.211
+    near: 0.10
+    far: 2.0
+    rate: 10.0
+  left_d435i:
+    parent: left_gripper_palm
+    xyz: [0.0, 0.080, 0.020]
+    rpy: [0.0, -1.016, -1.5707963267948966]
+    width: 640
+    height: 480
+    horizontal_fov: 1.518
+    near: 0.10
+    far: 2.0
+    rate: 10.0
+  right_d435i:
+    parent: right_gripper_palm
+    xyz: [0.0, -0.080, 0.020]
+    rpy: [0.0, -1.016, 1.5707963267948966]
+    width: 640
+    height: 480
+    horizontal_fov: 1.518
+    near: 0.10
+    far: 2.0
+    rate: 10.0

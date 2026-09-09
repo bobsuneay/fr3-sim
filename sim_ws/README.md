@@ -1,5 +1,17 @@
 # FR3 仿真工作空间
 
+## 双臂点云抓取与检测
+
+新增 [`fr3_bolt_inspection_cell`](src/fr3_bolt_inspection_cell/README.md)，基于 [`fr3_dual_bolt_cell`](src/fr3_dual_bolt_cell/README.md)，提供单颗螺丝点云位姿估计、缓慢下降抓取、绕零件中心多视角拍摄、双臂交接，以及操作面板。模型新增腰部检测相机和两个腕部 D435i 简化相机。
+
+本版使用明确的 Gazebo 夹持辅助，支持 Gazebo/mock；已做 Windows 离线测试，ROS 2/Gazebo 编译和完整流程仍需按包内验收文档运行。启动示例：
+
+```bash
+ros2 launch fr3_bolt_inspection_cell bringup.launch.py mode:=gazebo enable_execution:=true
+```
+
+等待启动完成后，在面板中点击“开始单次完整任务”。
+
 ## 当前推荐：真实 FR3 + Gazebo 螺栓工作台
 
 新入口为 [`fr3_bolt_cell`](src/fr3_bolt_cell/README.md)，采用用户提供的法奥 FR3 原始模型，搭建：侧装型材支架、可开合平行夹爪、固定头部 RGB-D 相机、桌面、20 个独立动态小螺栓，以及匹配的 ros2_control / MoveIt 2 / RViz 配置。

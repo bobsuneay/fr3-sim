@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+from fr3_bolt_inspection_cell.task_node import main
+main()
