@@ -65,5 +65,19 @@
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
+    <!--
+      Gazebo/mock ros2_control must know about the passive mimic joint so its
+      state follows the commanded finger.  The real HKV plugin exposes only
+      the left hardware joint; robot_state_publisher still applies the URDF
+      mimic relation there.
+    -->
+    <xacro:if value="${'$(arg gripper_plugin)' != 'ros2_hkv_gripper/GripperHardwareInterface'}">
+      <joint name="$(arg prefix)gripper_right_finger_joint">
+        <param name="mimic">$(arg prefix)gripper_left_finger_joint</param>
+        <param name="multiplier">-1</param>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </xacro:if>
   </ros2_control>
 </robot>

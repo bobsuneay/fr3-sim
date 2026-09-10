@@ -260,9 +260,11 @@ def controllers(mode, side=None):
         for name, kind in zip(names, ('joint_state_broadcaster/JointStateBroadcaster',
                                       'joint_trajectory_controller/JointTrajectoryController', grip_kind)):
             params[name] = {'type': kind}
+        gripper_joints = [arm+'_gripper_left_finger_joint']
+        if mode != 'real':
+            gripper_joints.append(arm+'_gripper_right_finger_joint')
         result[names[0]] = {'ros__parameters': {
-            'joints': [f'{arm}_j{i}' for i in range(1, 7)] +
-                      [arm+'_gripper_left_finger_joint'],
+            'joints': [f'{arm}_j{i}' for i in range(1, 7)] + gripper_joints,
             'interfaces': ['position'], 'use_local_topics': False}}
         result[names[1]] = {'ros__parameters': {
             'joints': [f'{arm}_j{i}' for i in range(1, 7)],

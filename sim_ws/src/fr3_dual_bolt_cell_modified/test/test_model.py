@@ -97,6 +97,15 @@ def test_real_manager_separation(arms, hardware):
         assert not any(k.startswith(other+'_') for k in cfg)
 
 
+def test_mimic_joint_is_published_only_by_simulation_state_broadcaster():
+    gazebo = controllers('gazebo')
+    for side in ('left', 'right'):
+        gazebo_joints = gazebo[f'{side}_joint_state_broadcaster']['ros__parameters']['joints']
+        real_joints = controllers('real', side)[f'{side}_joint_state_broadcaster']['ros__parameters']['joints']
+        assert f'{side}_gripper_right_finger_joint' in gazebo_joints
+        assert f'{side}_gripper_right_finger_joint' not in real_joints
+
+
 def test_moveit_has_both_arms_and_preserves_interarm_collisions(arms):
     root = model(arms)
     config = moveit_config(root, arms, SHARE)
