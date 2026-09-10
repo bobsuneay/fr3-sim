@@ -1,5 +1,6 @@
 """MoveIt Humble service/action adapter with simulation-clock-aware execution."""
 from copy import deepcopy
+import itertools
 import threading
 import time
 import numpy as np
@@ -221,7 +222,9 @@ class IO:
         if result.error_code.val != 1:
             raise RuntimeError(f'Trajectory execution failed: {result.error_code.val}')
 
-    def global_move(self, side, target=None, joints=None, continuation=None):
+    def global_move(self, side, target=None, joints=None, continuation=None, plan_only=False):
+        if continuation is not None:
+            return self.pick_approach(side, target, continuation)
         goal = MoveGroup.Goal()
         req = goal.request
         req.group_name = side+'_arm'
@@ -236,7 +239,7 @@ class IO:
         if joints is not None:
             for i, value in enumerate(joints, 1):
                 constraint.joint_constraints.append(JointConstraint(joint_name=f'{side}_j{i}',
-                    position=float(value), tolerance_above=.005, tolerance_below=.005, weight=1.0))
+                    position=float(value), tolerance_above=.0001, tolerance_below=.0001, weight=1.0))
         else:
             pos = PositionConstraint()
             pos.header.frame_id = 'world'
@@ -258,35 +261,87 @@ class IO:
         goal.planning_options.plan_only = True
         goal.planning_options.planning_scene_diff.is_diff = True
         goal.planning_options.planning_scene_diff.robot_state.is_diff = True
-        attempts = 3 if continuation is not None else 1
-        failure = 'No approach trajectory'
-        for attempt in range(1, attempts+1):
-            prepared = None
-            req.start_state = self.state()
-            result = self.action(self.move, goal, 40, planning_only=True)
-            if result.error_code.val != 1:
-                failure = f'Pose planning failed: {result.error_code.val}'
+        result = self.action(self.move, goal, 40, planning_only=True)
+        if result.error_code.val != 1:
+            raise PlanningFailure(f'Pose planning failed: {result.error_code.val}')
+        if plan_only:
+            return result.planned_trajectory
+        self.execute(result.planned_trajectory)
+
+    def pick_approach(self, side, above, grasp):
+        """Generate grasp IK first, propagate upward, then connect to that branch.
+
+        A free pose goal above the part can land on a slightly tilted wrist
+        solution that cannot follow the precise downward segment near j5=0.
+        Planning backward from the grasp keeps the selected grasp orientation.
+        """
+        start = self.state()
+        names = [f'{side}_j{i}' for i in range(1, 7)]
+        indices = [start.joint_state.name.index(name) for name in names]
+        initial = np.array([start.joint_state.position[i] for i in indices])
+        # FR3 j1/j3/j5 have symmetric limits. Sign changes explore base,
+        # elbow and wrist seeds without altering the actual robot state.
+        seen = []
+        failure = 'No grasp IK candidate'
+        for attempt, signs in enumerate(itertools.product((1, -1), repeat=3), 1):
+            seed = initial.copy()
+            seed[[0, 2, 4]] *= signs
+            request = GetPositionIK.Request()
+            request.ik_request.group_name = side+'_arm'
+            request.ik_request.ik_link_name = side+'_gripper_tcp'
+            request.ik_request.robot_state = deepcopy(start)
+            for index, value in zip(indices, seed):
+                request.ik_request.robot_state.joint_state.position[index] = float(value)
+            request.ik_request.pose_stamped.header.frame_id = 'world'
+            request.ik_request.pose_stamped.pose = pose(grasp)
+            request.ik_request.avoid_collisions = True
+            request.ik_request.timeout = duration(1.0)
+            response = self.call(self.ik, request)
+            if response.error_code.val != 1:
+                failure = f'Grasp IK code={response.error_code.val}'
+                self.n.get_logger().warning(f'Grasp candidate {attempt}/8: {failure}')
                 continue
-            if continuation is not None:
-                trajectory = result.planned_trajectory.joint_trajectory
-                if not trajectory.points:
-                    failure = 'Empty approach trajectory'
-                    continue
-                prospective = deepcopy(req.start_state)
-                for name, value in zip(trajectory.joint_names, trajectory.points[-1].positions):
-                    prospective.joint_state.position[prospective.joint_state.name.index(name)] = value
-                self.n.get_logger().info(
-                    f'Pick preflight {attempt}/{attempts}: verifying descent from planned approach endpoint')
-                try:
-                    descent, q, frames = self.seeded_cartesian(side, prospective, continuation)
-                    prepared = PreparedCartesian(side, deepcopy(prospective), descent, q, frames)
-                except PlanningFailure as exc:
-                    failure = str(exc)
-                    self.n.get_logger().warning(f'Approach candidate rejected: {failure}')
-                    continue
-            self.execute(result.planned_trajectory)
+            values = dict(zip(response.solution.joint_state.name, response.solution.joint_state.position))
+            grasp_q = np.array([values[name] for name in names])
+            if any(np.max(np.abs(grasp_q-previous)) < .01 for previous in seen):
+                self.n.get_logger().info(f'Grasp candidate {attempt}/8: repeated joint solution, skipping')
+                continue
+            seen.append(grasp_q)
+            at_grasp = deepcopy(start)
+            for index, value in zip(indices, grasp_q):
+                at_grasp.joint_state.position[index] = float(value)
+            self.n.get_logger().info(
+                f'Grasp-first preflight {attempt}/8: q={np.round(grasp_q, 5).tolist()}; '
+                'planning upward from grasp, no motion sent')
+            try:
+                self.validate_robot_state(at_grasp)
+                upward, q_up, frames_up = self.seeded_cartesian(side, at_grasp, above)
+                # Reverse geometry only. Timing is assigned later for descent.
+                q = q_up[::-1].copy()
+                frames = list(reversed(frames_up))
+                downward = deepcopy(upward)
+                downward.joint_trajectory.points = [
+                    JointTrajectoryPoint(positions=row.tolist()) for row in q]
+                at_above = deepcopy(start)
+                for index, value in zip(indices, q[0]):
+                    at_above.joint_state.position[index] = float(value)
+                connection = self.global_move(side, joints=q[0], plan_only=True)
+                points = connection.joint_trajectory.points
+                if not points:
+                    raise PlanningFailure('Empty connection to pre-grasp')
+                end = dict(zip(connection.joint_trajectory.joint_names, points[-1].positions))
+                if max(abs(end[name]-value) for name, value in zip(names, q[0])) > .001:
+                    raise PlanningFailure('Connection did not reach selected pre-grasp joint branch')
+            except (PlanningFailure, CartesianPlanningError) as exc:
+                failure = str(exc)
+                self.n.get_logger().warning(f'Grasp candidate {attempt}/8 rejected: {failure}')
+                continue
+            prepared = PreparedCartesian(side, at_above, downward, q, frames)
+            self.n.get_logger().info('Grasp-first plan selected: executing connection to verified pre-grasp')
+            # An execution failure must propagate, never trigger another candidate.
+            self.execute(connection)
             return prepared
-        raise PlanningFailure(f'Approach planning exhausted {attempts} attempt(s): {failure}; nothing executed')
+        raise PlanningFailure(f'Grasp-first planning exhausted 8 seeds: {failure}; no arm motion executed')
 
     def validate_robot_state(self, robot_state):
         req = GetStateValidity.Request()
@@ -369,7 +424,9 @@ class IO:
             req.ik_request.pose_stamped.header.frame_id = 'world'
             req.ik_request.pose_stamped.pose = pose(target_pose)
             req.ik_request.avoid_collisions = True
-            req.ik_request.timeout = duration(.3)
+            # Some Humble kinematics service releases read timeout.sec only.
+            # Use a whole second so the retry budget is not truncated to zero.
+            req.ik_request.timeout = duration(1.0)
             req.ik_request.constraints.joint_constraints = [
                 JointConstraint(joint_name=name, position=float(value),
                                 tolerance_above=self.c['joint_step_limit'],
@@ -383,18 +440,28 @@ class IO:
                 req.ik_request.avoid_collisions = False
                 req.ik_request.constraints = Constraints()
                 diagnostic = self.call(self.ik, req)
+                detail = 'no diagnostic joint solution'
                 if diagnostic.error_code.val == 1:
                     values = dict(zip(diagnostic.solution.joint_state.name,
                                       diagnostic.solution.joint_state.position))
                     self.validate_robot_state(state([values[name] for name in names]))
+                    delta = np.array([values[name] for name in names])-seed
+                    worst = int(np.argmax(np.abs(delta)))
+                    detail = (f'diagnostic state valid; {names[worst]} delta={abs(delta[worst]):.5f} rad, '
+                              f'local limit={self.c["joint_step_limit"]:.5f} rad')
+                    self.n.get_logger().warning(
+                        f'IK diagnostic: state_valid=True, seed={np.round(seed, 5).tolist()}, '
+                        f'solution={[round(values[name], 5) for name in names]}, '
+                        f'max_delta={abs(delta[worst]):.5f} rad at {names[worst]}, '
+                        f'limit={self.c["joint_step_limit"]:.5f} rad')
                 raise CartesianPlanningError(
-                    f'Collision-aware IK failed (code={error}); diagnostic IK code='
-                    f'{diagnostic.error_code.val}; no collision-free continuous solution confirmed')
+                    f'Seed-local IK failed (code={error}); diagnostic IK code='
+                    f'{diagnostic.error_code.val}; {detail}; continuous solution not confirmed')
             values = dict(zip(response.solution.joint_state.name, response.solution.joint_state.position))
             return [values[name] for name in names]
 
         self.n.get_logger().info(
-            'Preflighting seeded IK at <=1 mm, '
+            'Preflighting seeded IK at <=1 mm, timeout=1 s, '
             'collision checks ON, raw joint jump guard ON')
         try:
             q, frames = seeded_path(

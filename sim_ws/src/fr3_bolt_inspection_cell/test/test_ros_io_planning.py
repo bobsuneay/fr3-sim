@@ -25,6 +25,8 @@ def adapter(monkeypatch):
         'fr3_bolt_inspection_cell._test_ros_io', SHARE/'fr3_bolt_inspection_cell/ros_io.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.JointTrajectoryPoint = NS
+    module.Duration = NS
     io = module.IO.__new__(module.IO)
     io.n = MagicMock()
     io.c = dict(joint_speed=.12, joint_acceleration=.15, cartesian_step=.003,
@@ -60,33 +62,47 @@ def test_fallback_failure_never_executes_partial_path(adapter):
     io.execute.assert_not_called()
 
 
-def test_approach_checks_endpoint_and_retries_before_moving(adapter):
+def test_grasp_first_retries_and_reverses_verified_path_before_connection(adapter):
     module, io = adapter
-    first, second = trajectory(.1), trajectory(.2)
-    io.action = MagicMock(side_effect=[NS(error_code=NS(val=1), planned_trajectory=t)
-                                      for t in (first, second)])
+    names = [f'right_j{i}' for i in range(1, 7)]
+    io.state = lambda: NS(joint_state=NS(name=names, position=[.5]*6))
+    io.ik = object()
+    io.call = MagicMock(side_effect=[NS(error_code=NS(val=1),
+        solution=NS(joint_state=NS(name=names, position=[v]*6))) for v in (.1, .3)])
+    io.validate_robot_state = MagicMock()
+    connection = NS(joint_trajectory=NS(joint_names=names,
+                                        points=[NS(positions=[.5]*6), NS(positions=[.4]*6)]))
+    io.action = MagicMock(return_value=NS(error_code=NS(val=1), planned_trajectory=connection))
     states = []
     def preflight(side, state, target):
         io.execute.assert_not_called()
         states.append(state.joint_state.position[:])
         if len(states) == 1:
             raise module.PlanningFailure('IK branch blocked')
-        return trajectory(.3), np.array([[.2], [.3]]), [np.eye(4)]*2
+        assert target[2, 3] == pytest.approx(.776)
+        return connection, np.array([[.3]*6, [.4]*6]), [np.eye(4)]*2
     io.seeded_cartesian = preflight
-    selected = io.global_move('right', target=np.eye(4), continuation=np.eye(4))
-    assert states == [[.1], [.2]]
-    io.execute.assert_called_once_with(second)
-    assert selected.start.joint_state.position == [.2]
-    assert np.allclose(selected.positions, [[.2], [.3]])
+    above = np.eye(4)
+    above[2, 3] = .776
+    selected = io.global_move('right', target=above, continuation=np.eye(4))
+    assert states == [[.1]*6, [.3]*6]
+    io.execute.assert_called_once_with(connection)
+    assert selected.start.joint_state.position == [.4]*6
+    assert np.allclose(selected.positions, [[.4]*6, [.3]*6])
+    assert [p.positions for p in selected.trajectory.joint_trajectory.points] == [[.4]*6, [.3]*6]
 
 
 def test_all_approach_candidates_fail_without_motion(adapter):
     module, io = adapter
-    io.action = MagicMock(return_value=NS(error_code=NS(val=1), planned_trajectory=trajectory()))
-    io.seeded_cartesian = MagicMock(side_effect=module.PlanningFailure('collision'))
-    with pytest.raises(module.PlanningFailure, match='exhausted 3'):
+    names = [f'right_j{i}' for i in range(1, 7)]
+    io.state = lambda: NS(joint_state=NS(name=names, position=[.5]*6))
+    io.ik = object()
+    io.call = MagicMock(return_value=NS(error_code=NS(val=-31)))
+    io.action = MagicMock()
+    with pytest.raises(module.PlanningFailure, match='exhausted 8'):
         io.global_move('right', target=np.eye(4), continuation=np.eye(4))
-    assert io.action.call_count == 3
+    assert io.call.call_count == 8
+    io.action.assert_not_called()
     io.execute.assert_not_called()
 
 
@@ -101,6 +117,8 @@ def test_diagnostic_ik_reports_collision_without_returning_a_path(adapter):
             return NS(error_code=NS(val=1), pose_stamped=[NS(pose=NS(
                 position=NS(x=0.0, y=0.0, z=0.0), orientation=NS(x=0.0, y=0.0, z=0.0, w=1.0)))])
         if client is io.ik:
+            assert request.ik_request.timeout.sec == 1
+            assert request.ik_request.timeout.nanosec == 0
             attempts.append(request.ik_request.avoid_collisions)
             return NS(error_code=NS(val=-31 if attempts[-1] else 1),
                       solution=NS(joint_state=NS(name=names, position=[.01]*6)))
@@ -162,4 +180,48 @@ def test_prepared_descent_rechecks_scene_after_approach(adapter):
         module.CartesianPlanningError('right_wrist2_link <-> new_obstacle')])
     with pytest.raises(module.PlanningFailure, match='scene changed.*new_obstacle'):
         io.execute_prepared_cartesian(selected, .008)
+    io.execute.assert_not_called()
+
+
+def test_grasp_first_execution_failure_never_tries_another_candidate(adapter):
+    module, io = adapter
+    names = [f'right_j{i}' for i in range(1, 7)]
+    io.state = lambda: NS(joint_state=NS(name=names, position=[.5]*6))
+    io.ik = object()
+    requests = []
+    def call(client, request):
+        requests.append(request)
+        assert request.ik_request.timeout.sec == 1
+        assert request.ik_request.timeout.nanosec == 0
+        assert request.ik_request.avoid_collisions is True
+        return NS(error_code=NS(val=1), solution=NS(joint_state=NS(name=names, position=[.3]*6)))
+    io.call = call
+    io.validate_robot_state = MagicMock()
+    connection = NS(joint_trajectory=NS(joint_names=names, points=[NS(positions=[.4]*6)]))
+    io.action = MagicMock(return_value=NS(error_code=NS(val=1), planned_trajectory=connection))
+    io.seeded_cartesian = MagicMock(return_value=(connection, np.array([[.3]*6, [.4]*6]), [np.eye(4)]*2))
+    io.execute.side_effect = RuntimeError('Controller execution aborted')
+    with pytest.raises(RuntimeError, match='Controller execution aborted'):
+        io.global_move('right', target=np.eye(4), continuation=np.eye(4))
+    assert len(requests) == 1
+    io.execute.assert_called_once()
+
+
+def test_valid_but_distant_diagnostic_ik_is_reported_and_not_executed(adapter):
+    module, io = adapter
+    io.fk, io.ik = object(), object()
+    io.validate_robot_state = MagicMock()
+    names = [f'right_j{i}' for i in range(1, 7)]
+    start = NS(joint_state=NS(name=names, position=[0.0]*6))
+    def call(client, request):
+        if client is io.fk:
+            return NS(error_code=NS(val=1), pose_stamped=[NS(pose=NS(
+                position=NS(x=0.0, y=0.0, z=0.0), orientation=NS(x=0.0, y=0.0, z=0.0, w=1.0)))])
+        return NS(error_code=NS(val=-31 if request.ik_request.avoid_collisions else 1),
+                  solution=NS(joint_state=NS(name=names, position=[.5]*6)))
+    io.call = call
+    target = np.eye(4)
+    target[2, 3] = -.001
+    with pytest.raises(module.PlanningFailure, match='diagnostic state valid.*delta=0.50000'):
+        io.seeded_cartesian('right', start, target)
     io.execute.assert_not_called()
