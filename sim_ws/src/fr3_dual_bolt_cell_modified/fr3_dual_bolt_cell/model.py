@@ -125,8 +125,10 @@ def add_gripper(root, side, cfg):
     box(palm, (.16, .0705, .0615), (0, .00325, .03075))
     box(palm, (.155, .007, .0048), (0, 0, .0694))
     fixed(root, p+'tool_to_gripper', p+'tool0', p+'gripper_base_link')
-    # One commanded left finger and one mirrored right finger.  Both axes are
-    # +X; the opposite origins plus multiplier=-1 create the opposing motion.
+    # One commanded left finger and one mirrored right finger.  Positive q is
+    # the open direction: both fingers travel outward along -X.  The right
+    # finger uses multiplier=-1 so its signed joint value is mirrored while
+    # the physical motion remains symmetric.
     for index, origin_sign in enumerate((-1, 1)):
         finger = 'left' if index == 0 else 'right'
         link_name = p+'gripper_'+finger+'_finger_link'
@@ -142,7 +144,7 @@ def add_gripper(root, side, cfg):
         element(joint, 'parent', link=p+'gripper_base_link')
         element(joint, 'child', link=link_name)
         element(joint, 'origin', xyz=f'{origin_sign*0.01545} 0 .067')
-        element(joint, 'axis', xyz='1 0 0')
+        element(joint, 'axis', xyz='-1 0 0')
         element(joint, 'limit', lower=0, upper=.06,
                 effort=100, velocity=0.10)
         element(joint, 'dynamics', damping=2.0, friction=.10)
@@ -287,7 +289,7 @@ def semantic(root, arms):
         ready = element(srdf, 'group_state', name='ready', group=side+'_arm')
         for i, v in enumerate(arms[side]['initial'], 1):
             element(ready, 'joint', name=f'{side}_j{i}', value=v)
-        for name, q in (('closed', .00025), ('open', .1)):
+        for name, q in (('closed', 0.0), ('open', .06)):
             state = element(srdf, 'group_state', name=name, group=side+'_gripper')
             element(state, 'joint', name=side+'_gripper_left_finger_joint', value=q)
         element(srdf, 'disable_collisions', link1=side+'_wrist3_link',

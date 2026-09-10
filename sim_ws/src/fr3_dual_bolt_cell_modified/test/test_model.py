@@ -125,8 +125,8 @@ def test_gripper_width_mapping_and_physical_gap(arms):
         right = root.find(f"joint[@name='{side}_gripper_right_finger_joint']")
         assert left.find('origin').get('xyz').split()[0] == '-0.01545'
         assert right.find('origin').get('xyz').split()[0] == '0.01545'
-        assert left.find('axis').get('xyz') == '1 0 0'
-        assert right.find('axis').get('xyz') == '1 0 0'
+        assert left.find('axis').get('xyz') == '-1 0 0'
+        assert right.find('axis').get('xyz') == '-1 0 0'
         assert right.find('mimic').get('joint') == f'{side}_gripper_left_finger_joint'
         assert right.find('mimic').get('multiplier') == '-1'
 
