@@ -266,19 +266,38 @@ class IO:
         req.link_name = side+'_gripper_tcp'
         req.waypoints = [pose(t) for t in waypoints]
         req.max_step = self.c['cartesian_step']
-        req.jump_threshold = 2.0
+        req.jump_threshold = 3.0
         req.revolute_jump_threshold = self.c['joint_step_limit']
         req.avoid_collisions = True
         # MoveIt's Humble GetCartesianPath.srv has no velocity or acceleration
         # scaling fields.  The returned path is retimed below using the
         # configured Cartesian speed and joint limits before execution.
+        target = waypoints[-1]
+        self.n.get_logger().info(
+            f'Cartesian request: side={side}, waypoints={len(waypoints)}, '
+            f'step={req.max_step:.4f} m, jump={req.jump_threshold:.2f} rad, '
+            f'revolute_jump={req.revolute_jump_threshold:.2f} rad, '
+            f'avoid_collisions={req.avoid_collisions}, '
+            f'target=({target[0, 3]:.4f}, {target[1, 3]:.4f}, {target[2, 3]:.4f})')
         response = self.call(self.cart, req, 40)
-        if response.error_code.val != 1 or response.fraction < .99999:
-            raise PlanningFailure(f'Cartesian path incomplete ({response.fraction:.1%}); nothing executed')
         trajectory = response.solution
-        q = np.array([p.positions for p in trajectory.joint_trajectory.points])
-        if len(q) < 2 or np.max(np.abs(np.diff(q, axis=0))) > self.c['joint_step_limit']:
-            raise PlanningFailure('Empty path or joint discontinuity')
+        points = trajectory.joint_trajectory.points
+        q = np.array([p.positions for p in points]) if points else np.empty((0, 0))
+        max_joint_step = float(np.max(np.abs(np.diff(q, axis=0)))) if len(q) > 1 else 0.0
+        self.n.get_logger().info(
+            f'Cartesian result: error_code={response.error_code.val}, '
+            f'fraction={response.fraction:.1%}, points={len(points)}, '
+            f'max_joint_step={max_joint_step:.4f} rad')
+        if response.error_code.val != 1 or response.fraction < .99999:
+            raise PlanningFailure(
+                f'Cartesian path incomplete ({response.fraction:.1%}); '
+                f'error_code={response.error_code.val}, points={len(points)}, '
+                f'max_joint_step={max_joint_step:.4f} rad; nothing executed')
+        if len(q) < 2 or max_joint_step > self.c['joint_step_limit']:
+            raise PlanningFailure(
+                f'Empty path or joint discontinuity; points={len(points)}, '
+                f'max_joint_step={max_joint_step:.4f} rad, '
+                f'limit={self.c["joint_step_limit"]:.4f} rad')
         frames = self.fk_poses(side, trajectory, req.start_state)
         if object_tcp is not None and center is not None:
             object_poses = [t@np.linalg.inv(object_tcp) for t in frames]
