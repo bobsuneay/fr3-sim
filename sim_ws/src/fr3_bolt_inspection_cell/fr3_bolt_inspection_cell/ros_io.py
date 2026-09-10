@@ -23,7 +23,7 @@ from std_srvs.srv import SetBool, Trigger
 from gazebo_msgs.srv import GetEntityState
 from trajectory_msgs.msg import JointTrajectoryPoint
 from .core import SimClockDeadline, segment_times
-from .cartesian import CartesianPlanningError, seeded_path
+from .cartesian import CartesianPlanningError, PreparedCartesian, seeded_path
 
 
 class PlanningFailure(RuntimeError):
@@ -261,6 +261,7 @@ class IO:
         attempts = 3 if continuation is not None else 1
         failure = 'No approach trajectory'
         for attempt in range(1, attempts+1):
+            prepared = None
             req.start_state = self.state()
             result = self.action(self.move, goal, 40, planning_only=True)
             if result.error_code.val != 1:
@@ -277,14 +278,58 @@ class IO:
                 self.n.get_logger().info(
                     f'Pick preflight {attempt}/{attempts}: verifying descent from planned approach endpoint')
                 try:
-                    self.seeded_cartesian(side, prospective, continuation)
+                    descent, q, frames = self.seeded_cartesian(side, prospective, continuation)
+                    prepared = PreparedCartesian(side, deepcopy(prospective), descent, q, frames)
                 except PlanningFailure as exc:
                     failure = str(exc)
                     self.n.get_logger().warning(f'Approach candidate rejected: {failure}')
                     continue
             self.execute(result.planned_trajectory)
-            return
+            return prepared
         raise PlanningFailure(f'Approach planning exhausted {attempts} attempt(s): {failure}; nothing executed')
+
+    def validate_robot_state(self, robot_state):
+        req = GetStateValidity.Request()
+        req.robot_state = robot_state
+        # Empty group checks the whole robot, including the other arm.
+        response = self.call(self.validity, req)
+        if not response.valid:
+            pairs = sorted({f'{c.contact_body_1} <-> {c.contact_body_2}'
+                            for c in response.contacts})
+            raise CartesianPlanningError('Invalid state: '+(
+                '; '.join(pairs[:8]) or 'joint bounds/constraints; no contacts returned'))
+
+    def execute_prepared_cartesian(self, plan, speed):
+        """Execute the selected descent, as a stage of the planned pick sequence.
+
+        Revalidate feedback and scene; do not discard the successful solution
+        and invoke a different IK/Cartesian planner after reaching the object.
+        """
+        if not isinstance(plan, PreparedCartesian):
+            raise PlanningFailure('Missing prepared descent; nothing executed')
+        current = self.state()
+        measured = dict(zip(current.joint_state.name, current.joint_state.position))
+        for name, expected in zip(plan.start.joint_state.name, plan.start.joint_state.position):
+            tolerance = .0015 if 'finger_joint' in name else .01
+            value = measured.get(name, float('nan'))
+            if not np.isfinite(value) or abs(value-expected) > tolerance:
+                raise PlanningFailure(
+                    f'Prepared descent start changed: {name}, expected={expected:.5f}, '
+                    f'actual={value:.5f}, tolerance={tolerance:.5f}; nothing executed')
+        names = plan.trajectory.joint_trajectory.joint_names
+        self.n.get_logger().info(
+            f'Revalidating prepared descent: side={plan.side}, points={len(plan.positions)}; '
+            'using selected trajectory, no new IK request')
+        try:
+            self.validate_robot_state(current)
+            for point in plan.positions:
+                sample = deepcopy(current)
+                for name, value in zip(names, point):
+                    sample.joint_state.position[sample.joint_state.name.index(name)] = float(value)
+                self.validate_robot_state(sample)
+        except CartesianPlanningError as exc:
+            raise PlanningFailure(f'Prepared descent scene changed: {exc}; nothing executed') from exc
+        self.run_cartesian_trajectory(plan.trajectory, plan.positions, plan.frames, speed)
 
     def seeded_cartesian(self, side, start, target):
         """Use timed, seeded IK when the Cartesian service truncates a short move."""
@@ -295,17 +340,6 @@ class IO:
             for i, value in zip(indices, q):
                 result.joint_state.position[i] = float(value)
             return result
-
-        def validity(robot_state):
-            req = GetStateValidity.Request()
-            req.robot_state = robot_state
-            # Empty group checks the whole robot, including the other arm.
-            response = self.call(self.validity, req)
-            if not response.valid:
-                pairs = sorted({f'{c.contact_body_1} <-> {c.contact_body_2}'
-                                for c in response.contacts})
-                raise CartesianPlanningError('Invalid state: '+(
-                    '; '.join(pairs[:8]) or 'joint bounds/constraints; no contacts returned'))
 
         def fk(robot_state):
             req = GetPositionFK.Request()
@@ -321,7 +355,7 @@ class IO:
         def inspect(q):
             nonlocal last_report
             robot_state = state(q)
-            validity(robot_state)
+            self.validate_robot_state(robot_state)
             if time.monotonic()-last_report >= 5:
                 self.n.get_logger().info('Seeded Cartesian preflight: checking IK and collisions; no motion sent')
                 last_report = time.monotonic()
@@ -352,7 +386,7 @@ class IO:
                 if diagnostic.error_code.val == 1:
                     values = dict(zip(diagnostic.solution.joint_state.name,
                                       diagnostic.solution.joint_state.position))
-                    validity(state([values[name] for name in names]))
+                    self.validate_robot_state(state([values[name] for name in names]))
                 raise CartesianPlanningError(
                     f'Collision-aware IK failed (code={error}); diagnostic IK code='
                     f'{diagnostic.error_code.val}; no collision-free continuous solution confirmed')
@@ -423,6 +457,10 @@ class IO:
                 f'limit={self.c["joint_step_limit"]:.4f} rad')
         if frames is None:
             frames = self.fk_poses(side, trajectory, req.start_state)
+        self.run_cartesian_trajectory(trajectory, q, frames, speed, object_tcp, center)
+
+    def run_cartesian_trajectory(self, trajectory, q, frames, speed, object_tcp=None, center=None):
+        """Apply the same slow timing and centre guard to fresh or prepared plans."""
         if object_tcp is not None and center is not None:
             object_poses = [t@np.linalg.inv(object_tcp) for t in frames]
             if max(np.linalg.norm(t[:3, 3]-center) for t in object_poses) > self.c['center_tolerance']:

@@ -1,4 +1,5 @@
 """Seeded Cartesian fallback, independent of ROS and with no execution side effects."""
+from dataclasses import dataclass
 import math
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -7,6 +8,16 @@ from .core import interpolate_object
 
 class CartesianPlanningError(RuntimeError):
     pass
+
+
+@dataclass
+class PreparedCartesian:
+    """The selected stage solution, retained across the preceding arm motion."""
+    side: str
+    start: object  # ROS RobotState, kept opaque in this ROS-independent module
+    trajectory: object
+    positions: np.ndarray
+    frames: list
 
 
 def seeded_path(start_q, start_pose, target, solve, inspect, *, step, joint_limit):

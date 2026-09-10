@@ -71,10 +71,13 @@ def test_approach_checks_endpoint_and_retries_before_moving(adapter):
         states.append(state.joint_state.position[:])
         if len(states) == 1:
             raise module.PlanningFailure('IK branch blocked')
+        return trajectory(.3), np.array([[.2], [.3]]), [np.eye(4)]*2
     io.seeded_cartesian = preflight
-    io.global_move('right', target=np.eye(4), continuation=np.eye(4))
+    selected = io.global_move('right', target=np.eye(4), continuation=np.eye(4))
     assert states == [[.1], [.2]]
     io.execute.assert_called_once_with(second)
+    assert selected.start.joint_state.position == [.2]
+    assert np.allclose(selected.positions, [[.2], [.3]])
 
 
 def test_all_approach_candidates_fail_without_motion(adapter):
@@ -111,4 +114,52 @@ def test_diagnostic_ik_reports_collision_without_returning_a_path(adapter):
     with pytest.raises(module.PlanningFailure, match='right_wrist2_link <-> table_top'):
         io.seeded_cartesian('right', start, target)
     assert attempts == [True, False]
+    io.execute.assert_not_called()
+
+
+def prepared_plan(module):
+    start = NS(joint_state=NS(name=['right_j1', 'left_j1', 'right_left_finger_joint'],
+                             position=[.2, 0.0, .0175]))
+    selected = trajectory(.3)
+    selected.joint_trajectory.points[0].positions = [.2]
+    return module.PreparedCartesian('right', start, selected, np.array([[.2], [.3]]), [np.eye(4)]*2)
+
+
+def test_prepared_descent_executes_selected_solution_without_replanning(adapter):
+    from copy import deepcopy
+    module, io = adapter
+    selected = prepared_plan(module)
+    io.state = lambda: deepcopy(selected.start)
+    io.validate_robot_state = MagicMock()
+    io.call = MagicMock(side_effect=AssertionError('Must not call IK or Cartesian planner again'))
+    io.execute_prepared_cartesian(selected, .008)
+    io.execute.assert_called_once_with(selected.trajectory)
+    io.call.assert_not_called()
+    states = [call.args[0].joint_state.position for call in io.validate_robot_state.call_args_list]
+    assert states == [[.2, 0, .0175], [.2, 0, .0175], [.3, 0, .0175]]
+    assert selected.trajectory.joint_trajectory.points[-1].velocities == [0.0]
+
+
+@pytest.mark.parametrize('joint_index,drift', [(0, .02), (1, .02), (2, .002)])
+def test_prepared_descent_rejects_arm_or_finger_drift(adapter, joint_index, drift):
+    from copy import deepcopy
+    module, io = adapter
+    selected = prepared_plan(module)
+    actual = deepcopy(selected.start)
+    actual.joint_state.position[joint_index] += drift
+    io.state = lambda: actual
+    with pytest.raises(module.PlanningFailure, match='start changed'):
+        io.execute_prepared_cartesian(selected, .008)
+    io.execute.assert_not_called()
+
+
+def test_prepared_descent_rechecks_scene_after_approach(adapter):
+    from copy import deepcopy
+    module, io = adapter
+    selected = prepared_plan(module)
+    io.state = lambda: deepcopy(selected.start)
+    io.validate_robot_state = MagicMock(side_effect=[None, None,
+        module.CartesianPlanningError('right_wrist2_link <-> new_obstacle')])
+    with pytest.raises(module.PlanningFailure, match='scene changed.*new_obstacle'):
+        io.execute_prepared_cartesian(selected, .008)
     io.execute.assert_not_called()
