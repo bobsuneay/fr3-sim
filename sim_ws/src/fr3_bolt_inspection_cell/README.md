@@ -74,6 +74,8 @@ ros2 launch fr3_bolt_inspection_cell bringup.launch.py mode:=mock
 ros2 launch fr3_bolt_inspection_cell bringup.launch.py mode:=gazebo enable_execution:=true
 ```
 
+控制器动作的超时按 `/clock` 仿真时间计算。四个深度相机使 Gazebo 实时率低于 1 时，机械臂会继续等待轨迹完成，不会因电脑上的墙上时间先到而在 `APPROACH` 后误报失败；如果 `/clock` 连续 30 秒完全不前进，任务仍会停止并保持夹持。终端每 10 秒会打印一次控制器进度。
+
 等待控制器和 MoveIt 启动，在面板中点击 **开始单次完整任务**。面板可切换四路相机图像，显示当前阶段，并提供 **停止运动并保持夹持**。启动 launch 不会自动运动。停止是 ROS 动作取消，不是实机急停；本版没有实机连接。
 
 不使用面板时加 `panel:=false`，通过服务运行：

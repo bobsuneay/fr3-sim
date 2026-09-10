@@ -1,4 +1,4 @@
-"""MoveIt Humble service/action adapter. All waits use wall-clock deadlines."""
+"""MoveIt Humble service/action adapter with simulation-clock-aware execution."""
 import threading
 import time
 import numpy as np
@@ -20,7 +20,7 @@ from shape_msgs.msg import SolidPrimitive
 from std_srvs.srv import SetBool, Trigger
 from gazebo_msgs.srv import GetEntityState
 from trajectory_msgs.msg import JointTrajectoryPoint
-from .core import segment_times
+from .core import SimClockDeadline, segment_times
 
 
 class PlanningFailure(RuntimeError):
@@ -91,6 +91,26 @@ class IO:
             raise future.exception()
         return future.result()
 
+    def wait_sim_time(self, future, timeout, stalled_wall_timeout=30.0):
+        """Wait in ROS time so a slow Gazebo run is not mistaken for a failure."""
+        now = self.n.get_clock().now().nanoseconds*1e-9
+        deadline = SimClockDeadline(now, time.monotonic(), timeout, stalled_wall_timeout)
+        last_report = time.monotonic()
+        while not future.done():
+            self.check()
+            wall_now = time.monotonic()
+            ros_now = self.n.get_clock().now().nanoseconds*1e-9
+            elapsed = deadline.check(ros_now, wall_now)
+            if wall_now-last_report >= 10.0:
+                self.n.get_logger().info(
+                    f'Controller still running: {elapsed:.1f}/{timeout:.1f} s simulation time')
+                last_report = wall_now
+            self.n.stop_event.wait(.02)
+        self.check()
+        if future.exception():
+            raise future.exception()
+        return future.result()
+
     def call(self, client, request, timeout=15):
         self.check()
         if not client.wait_for_service(timeout_sec=3):
@@ -102,7 +122,7 @@ class IO:
             if self.active is not None:
                 self.active.cancel_goal_async()
 
-    def action(self, client, goal, timeout, planning_only=False):
+    def action(self, client, goal, timeout, planning_only=False, controller_time=False):
         self.check()
         if not client.wait_for_server(timeout_sec=3):
             raise RuntimeError('Action server unavailable')
@@ -127,7 +147,12 @@ class IO:
         with self.goal_lock:
             self.active = handle
         try:
-            result = self.wait(handle.get_result_async(), timeout)
+            result_future = handle.get_result_async()
+            use_sim_time = bool(self.n.get_parameter('use_sim_time').value)
+            if controller_time and use_sim_time:
+                result = self.wait_sim_time(result_future, timeout)
+            else:
+                result = self.wait(result_future, timeout)
             if result.status != GoalStatus.STATUS_SUCCEEDED and not planning_only:
                 raise RuntimeError(f'Action ended with status {result.status}')
             return result.result
@@ -186,7 +211,8 @@ class IO:
         goal = ExecuteTrajectory.Goal()
         goal.trajectory = trajectory
         t = points[-1].time_from_start
-        result = self.action(self.execute_client, goal, t.sec+t.nanosec*1e-9+30)
+        result = self.action(self.execute_client, goal, t.sec+t.nanosec*1e-9+30,
+                             controller_time=True)
         if result.error_code.val != 1:
             raise RuntimeError(f'Trajectory execution failed: {result.error_code.val}')
 
@@ -197,8 +223,10 @@ class IO:
         req.start_state = self.state()
         req.num_planning_attempts = 5
         req.allowed_planning_time = 10.0
-        req.max_velocity_scaling_factor = .15
-        req.max_acceleration_scaling_factor = .1
+        # The MoveIt model limits these joints to 0.3 rad/s and 0.3 rad/s^2.
+        # Match inspection.yaml's 0.12 rad/s and 0.15 rad/s^2 limits.
+        req.max_velocity_scaling_factor = min(1.0, self.c['joint_speed']/.3)
+        req.max_acceleration_scaling_factor = min(1.0, self.c['joint_acceleration']/.3)
         constraint = Constraints()
         if joints is not None:
             for i, value in enumerate(joints, 1):
@@ -274,7 +302,7 @@ class IO:
         goal.trajectory.joint_names = [side+'_left_finger_joint', side+'_right_finger_joint']
         goal.trajectory.points = [JointTrajectoryPoint(positions=[width/2]*2,
             velocities=[0.0, 0.0], time_from_start=duration(3.0))]
-        result = self.action(self.fingers[side], goal, 15)
+        result = self.action(self.fingers[side], goal, 15, controller_time=True)
         if result.error_code != 0:
             raise RuntimeError('Gripper trajectory failed: '+result.error_string)
         state = self.state().joint_state

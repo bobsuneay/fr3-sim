@@ -12,8 +12,8 @@ import yaml
 SHARE = Path(__file__).resolve().parents[1]
 BASE = SHARE.parent/'fr3_dual_bolt_cell'
 sys.path[:0] = [str(SHARE), str(BASE)]
-from fr3_bolt_inspection_cell.core import (centered_views, estimate_bolt, grasp_in_object,
-    interpolate_object, segment_times, transform, validate)
+from fr3_bolt_inspection_cell.core import (SimClockDeadline, centered_views, estimate_bolt,
+    grasp_in_object, interpolate_object, segment_times, transform, validate)
 from fr3_bolt_inspection_cell.model import augment, inspection_world
 from fr3_dual_bolt_cell.model import build_model, semantic
 from fr3_dual_bolt_cell.world import load_scene, world_xml
@@ -70,6 +70,18 @@ def test_object_center_remains_fixed_through_interpolated_views():
             assert np.allclose(tcp@np.linalg.inv(grasp), obj)
             for sample in interpolate_object(neutral, obj, grasp):
                 assert np.allclose((sample@np.linalg.inv(grasp))[:3, 3], c['inspection_center'])
+
+
+def test_sim_clock_deadline_accepts_slow_simulation_and_detects_stalls():
+    deadline = SimClockDeadline(100.0, 10.0, timeout=8.0, stall_timeout=30.0)
+    assert deadline.check(102.0, 35.0) == pytest.approx(2.0)
+    assert deadline.check(104.0, 64.0) == pytest.approx(4.0)
+    with pytest.raises(TimeoutError, match='clock stopped'):
+        deadline.check(104.0, 94.1)
+
+    deadline = SimClockDeadline(100.0, 10.0, timeout=8.0)
+    with pytest.raises(TimeoutError, match='ROS-time deadline'):
+        deadline.check(108.1, 11.0)
 
 
 def test_narrow_fingers_have_separate_shaft_grasps():

@@ -175,3 +175,25 @@ def segment_times(positions, tcp_positions, speed, joint_speed, acceleration):
     dt = np.maximum.reduce([1.875*dx/speed, 1.875*dq/joint_speed,
                             np.sqrt(5.8*dq/acceleration), np.full(len(dq), .05)])
     return np.r_[.1, .1+np.cumsum(dt)]
+
+
+class SimClockDeadline:
+    """Track a simulated-time deadline while detecting a stalled /clock."""
+
+    def __init__(self, ros_time, wall_time, timeout, stall_timeout=30.0):
+        self.start_ros = self.last_ros = float(ros_time)
+        self.last_progress_wall = float(wall_time)
+        self.timeout = float(timeout)
+        self.stall_timeout = float(stall_timeout)
+
+    def check(self, ros_time, wall_time):
+        ros_time, wall_time = float(ros_time), float(wall_time)
+        if ros_time > self.last_ros + 1e-6:
+            self.last_ros = ros_time
+            self.last_progress_wall = wall_time
+        elapsed = ros_time-self.start_ros
+        if elapsed > self.timeout:
+            raise TimeoutError('Controller exceeded its ROS-time deadline')
+        if wall_time-self.last_progress_wall > self.stall_timeout:
+            raise TimeoutError('ROS/Gazebo clock stopped during controller action')
+        return elapsed
