@@ -269,8 +269,9 @@ class IO:
         req.jump_threshold = 2.0
         req.revolute_jump_threshold = self.c['joint_step_limit']
         req.avoid_collisions = True
-        req.max_velocity_scaling_factor = .1
-        req.max_acceleration_scaling_factor = .1
+        # MoveIt's Humble GetCartesianPath.srv has no velocity or acceleration
+        # scaling fields.  The returned path is retimed below using the
+        # configured Cartesian speed and joint limits before execution.
         response = self.call(self.cart, req, 40)
         if response.error_code.val != 1 or response.fraction < .99999:
             raise PlanningFailure(f'Cartesian path incomplete ({response.fraction:.1%}); nothing executed')
