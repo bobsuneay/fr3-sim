@@ -1,0 +1,22 @@
+# metres / radians. Right mount reproduces fr3_bolt_cell; left is opposite.
+# These are layout defaults, not surveyed real robot base/TCP calibration.
+left:
+  xyz: [0.0, 0.10, 1.10]
+  rpy: [-1.5707963267948966, 0.0, 0.0]
+  # Body sagittal plane: Y=0 (XZ plane), so (x,y,z) -> (x,-y,z).
+  # Same physical FR3 geometry, no reflected meshes or altered joint axes.
+  # qL = [pi-qR1, -pi-qR2, -qR3, -pi-qR4, -qR5, -qR6].
+  initial: [1.5707963267948966, -1.2415926535897932, -1.5, -1.7415926535897932, 0.3, 0.0]
+right:
+  xyz: [0.0, -0.10, 1.10]
+  rpy: [1.5707963267948966, 0.0, 0.0]
+  initial: [1.5707963267948966, -1.9, 1.5, -1.4, -0.3, 0.0]
+gripper:
+  # Simulation convention inherited from fr3_bolt_cell: q increases outward.
+  # This is not the real HKV driver's normalised closure command.
+  open_gap: 0.060
+  finger_travel: 0.050
+  flange_xyz: [0.0, 0.0, 0.10]
+  flange_rpy: [0.0, 0.0, 0.0]
+  tcp_xyz: [0.0, 0.0, 0.145]
+  tcp_rpy: [0.0, 0.0, 0.0]

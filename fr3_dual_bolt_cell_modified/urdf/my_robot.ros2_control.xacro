@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!--
+  Hardware boundary for one FR3 arm and its HKV gripper.
+
+  The mechanical model deliberately does not contain ros2_control blocks.
+  Keep the defaults on mock_components/GenericSystem for offline work.  A
+  real deployment changes only arm_plugin, gripper_plugin and the hardware
+  parameters supplied by the launch file.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ros2_control_fragment">
+  <xacro:arg name="prefix" default="left_"/>
+  <xacro:arg name="arm_plugin" default="mock_components/GenericSystem"/>
+  <xacro:arg name="gripper_plugin" default="mock_components/GenericSystem"/>
+  <xacro:arg name="robot_ip" default=""/>
+  <xacro:arg name="serial_port" default=""/>
+  <xacro:arg name="baud_rate" default="1000000"/>
+  <xacro:arg name="timeout" default="1000"/>
+  <xacro:arg name="slave_address" default="1"/>
+  <xacro:arg name="gripper_model" default="TG-9801"/>
+  <xacro:arg name="position_open_register" default="100"/>
+  <xacro:arg name="position_closed_register" default="0"/>
+  <xacro:arg name="position_mode_speed_register" default="300"/>
+  <xacro:arg name="target_force_percent" default="20"/>
+  <xacro:arg name="gripper_closed_position" default="0.1"/>
+  <xacro:arg name="initial_j1" default="0"/>
+  <xacro:arg name="initial_j2" default="0"/>
+  <xacro:arg name="initial_j3" default="0"/>
+  <xacro:arg name="initial_j4" default="0"/>
+  <xacro:arg name="initial_j5" default="0"/>
+  <xacro:arg name="initial_j6" default="0"/>
+
+  <ros2_control name="$(arg prefix)arm_system" type="system">
+    <hardware>
+      <plugin>$(arg arm_plugin)</plugin>
+      <xacro:if value="${'$(arg arm_plugin)' == 'fairino_hardware/FairinoHardwareInterface'}">
+        <param name="robot_ip">$(arg robot_ip)</param>
+      </xacro:if>
+    </hardware>
+    <joint name="$(arg prefix)j1"><command_interface name="position"/><state_interface name="position"><xacro:if value="${'$(arg arm_plugin)' != 'fairino_hardware/FairinoHardwareInterface'}"><param name="initial_value">$(arg initial_j1)</param></xacro:if></state_interface></joint>
+    <joint name="$(arg prefix)j2"><command_interface name="position"/><state_interface name="position"><xacro:if value="${'$(arg arm_plugin)' != 'fairino_hardware/FairinoHardwareInterface'}"><param name="initial_value">$(arg initial_j2)</param></xacro:if></state_interface></joint>
+    <joint name="$(arg prefix)j3"><command_interface name="position"/><state_interface name="position"><xacro:if value="${'$(arg arm_plugin)' != 'fairino_hardware/FairinoHardwareInterface'}"><param name="initial_value">$(arg initial_j3)</param></xacro:if></state_interface></joint>
+    <joint name="$(arg prefix)j4"><command_interface name="position"/><state_interface name="position"><xacro:if value="${'$(arg arm_plugin)' != 'fairino_hardware/FairinoHardwareInterface'}"><param name="initial_value">$(arg initial_j4)</param></xacro:if></state_interface></joint>
+    <joint name="$(arg prefix)j5"><command_interface name="position"/><state_interface name="position"><xacro:if value="${'$(arg arm_plugin)' != 'fairino_hardware/FairinoHardwareInterface'}"><param name="initial_value">$(arg initial_j5)</param></xacro:if></state_interface></joint>
+    <joint name="$(arg prefix)j6"><command_interface name="position"/><state_interface name="position"><xacro:if value="${'$(arg arm_plugin)' != 'fairino_hardware/FairinoHardwareInterface'}"><param name="initial_value">$(arg initial_j6)</param></xacro:if></state_interface></joint>
+  </ros2_control>
+
+  <ros2_control name="$(arg prefix)gripper_system" type="system">
+    <hardware>
+      <plugin>$(arg gripper_plugin)</plugin>
+      <xacro:if value="${'$(arg gripper_plugin)' == 'ros2_hkv_gripper/GripperHardwareInterface'}">
+        <param name="serial_port">$(arg serial_port)</param>
+        <param name="baud_rate">$(arg baud_rate)</param>
+        <param name="timeout">$(arg timeout)</param>
+        <param name="slave_address">$(arg slave_address)</param>
+        <param name="gripper_model">$(arg gripper_model)</param>
+        <param name="position_open_register">$(arg position_open_register)</param>
+        <param name="position_closed_register">$(arg position_closed_register)</param>
+        <param name="position_mode_speed_register">$(arg position_mode_speed_register)</param>
+        <param name="target_force_percent">$(arg target_force_percent)</param>
+        <param name="gripper_closed_position">$(arg gripper_closed_position)</param>
+      </xacro:if>
+    </hardware>
+    <joint name="$(arg prefix)gripper_left_finger_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+</robot>

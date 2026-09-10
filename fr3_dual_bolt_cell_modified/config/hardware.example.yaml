@@ -1,0 +1,19 @@
+# Replace both IPs and serial paths before real commissioning.
+driver_package: fairino_hardware_v3_9_7
+firmware: '3.9.7'
+commissioned: false
+left:
+  robot_ip: ''
+  serial_port: /dev/serial/by-id/REPLACE_LEFT
+right:
+  robot_ip: ''
+  serial_port: /dev/serial/by-id/REPLACE_RIGHT
+gripper:
+  baud_rate: 1000000
+  timeout: 1000
+  slave_address: 1
+  gripper_model: TG-9801
+  position_open_register: 100
+  position_closed_register: 0
+  position_mode_speed_register: 300
+  target_force_percent: 20
