@@ -20,6 +20,25 @@ def mesh_collisions_from_visual(link):
         link.append(collision)
 
 
+def stabilize_gripper_contacts(root, side):
+    """Prevent tiny CAD self-contacts from exciting Gazebo finger joints."""
+    for which in ('left', 'right'):
+        reference = f'{side}_{which}_finger'
+        gazebo = root.find(f"gazebo[@reference='{reference}']")
+        if gazebo is None:
+            gazebo = element(root, 'gazebo', reference=reference)
+        self_collide = gazebo.find('selfCollide')
+        if self_collide is None:
+            self_collide = element(gazebo, 'selfCollide')
+        self_collide.text = 'false'
+        for tag, value in (('mu1', '0.35'), ('mu2', '0.35'),
+                           ('kp', '30000'), ('kd', '80')):
+            node = gazebo.find(tag)
+            if node is None:
+                node = element(gazebo, tag)
+            node.text = value
+
+
 def augment(root, cfg, sim):
     validate(cfg)
     root.set('name', 'fr3_bolt_inspection_cell')
@@ -34,6 +53,7 @@ def augment(root, cfg, sim):
         mesh_collisions_from_visual(root.find(f"link[@name='{side}_gripper_palm']"))
         for which in ('left', 'right'):
             mesh_collisions_from_visual(root.find(f"link[@name='{side}_{which}_finger']"))
+        stabilize_gripper_contacts(root, side)
         # The simulator grasp plugin attaches to this physical palm frame.
         if sim:
             # Gazebo's URDF importer otherwise reduces the wrist/tool/palm fixed

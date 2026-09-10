@@ -96,6 +96,10 @@ def test_original_hkv_fingers_use_mesh_collision_geometry():
             assert visuals
             assert collisions == visuals
             assert not any(v.find('geometry/box') is not None for v in link.findall('collision'))
+            if part.endswith('finger'):
+                contact = root.find(f"gazebo[@reference='{side}_{part}']")
+                assert contact.findtext('selfCollide') == 'false'
+                assert contact.findtext('kd') == '80'
 
 
 def test_grasp_config_remains_valid():
