@@ -84,12 +84,23 @@ def test_sim_clock_deadline_accepts_slow_simulation_and_detects_stalls():
         deadline.check(108.1, 11.0)
 
 
-def test_narrow_fingers_have_separate_shaft_grasps():
-    # Contact strips: [-8,-4] and [4,8] mm; head begins at +8.5 mm.
+def test_original_hkv_fingers_use_mesh_collision_geometry():
+    root, _ = robot('mock')
+    for side in ('left', 'right'):
+        for part in ('gripper_palm', 'left_finger', 'right_finger'):
+            link = root.find(f"link[@name='{side}_{part}']")
+            visuals = {v.find('geometry/mesh').get('filename') for v in link.findall('visual')
+                       if v.find('geometry/mesh') is not None}
+            collisions = {v.find('geometry/mesh').get('filename') for v in link.findall('collision')
+                          if v.find('geometry/mesh') is not None}
+            assert visuals
+            assert collisions == visuals
+            assert not any(v.find('geometry/box') is not None for v in link.findall('collision'))
+
+
+def test_grasp_config_remains_valid():
+    # The grasp gate still validates the original controller opening range.
     c = config()
-    donor = (-c['grasp_offset']-.002, -c['grasp_offset']+.002)
-    receiver = (c['grasp_offset']-.002, c['grasp_offset']+.002)
-    assert donor[0] > -.0125 and donor[1] < receiver[0] and receiver[1] < .0085
     assert c['close_width'] < .005 < c['open_width']
 
 

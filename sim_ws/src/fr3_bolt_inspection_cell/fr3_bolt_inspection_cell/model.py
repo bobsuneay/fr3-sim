@@ -1,8 +1,23 @@
 """Extend the existing dual cell without changing its assets or launch behaviour."""
+from copy import deepcopy
 import math
 import xml.etree.ElementTree as ET
 from fr3_dual_bolt_cell.model import element, fixed, box, inertial
 from .core import validate
+
+
+def mesh_collisions_from_visual(link):
+    """Use the supplied HKV CAD mesh for collision as well as display."""
+    for collision in list(link.findall('collision')):
+        link.remove(collision)
+    for visual in link.findall('visual'):
+        if visual.find('geometry/mesh') is None:
+            continue
+        collision = deepcopy(visual)
+        collision.tag = 'collision'
+        for material in list(collision.findall('material')):
+            collision.remove(material)
+        link.append(collision)
 
 
 def augment(root, cfg, sim):
@@ -14,24 +29,11 @@ def augment(root, cfg, sim):
         tool = root.find(f"link[@name='{side}_tool0']")
         if tool.find('inertial') is None:
             inertial(tool, .01, (.02, .02, .01))
-        # Keep the HKV palm/rail; substitute explicit narrow inspection jaws.
-        for which, sign in (('left', -1), ('right', 1)):
-            name = f'{side}_{which}_finger'
-            link = root.find(f"link[@name='{name}']")
-            for node in list(link):
-                link.remove(node)
-            inertial(link, .03, (.008, .004, .078), (0, 0, .039))
-            box(link, (.008, .004, .078), (0, 0, .039), visual=True)
-            box(link, (.008, .004, .078), (0, 0, .039))
-            joint = root.find(f"joint[@name='{name}_joint']")
-            joint.find('origin').set('xyz', f'{sign*.004} 0 .072')
-            state = root.find(f"ros2_control/joint[@name='{name}_joint']/state_interface[@name='position']")
-            initial = state.find("param[@name='initial_value']")
-            if initial is None:
-                initial = element(state, 'param', name='initial_value')
-            initial.text = str(cfg['open_width']/2)
-        tcp = root.find(f"joint[@name='{side}_palm_to_tcp']/origin")
-        tcp.set('xyz', '0 0 .149')
+        # Keep the original HKV palm and fingers. Their CAD meshes are used
+        # directly for collision, avoiding oversized rectangular proxies.
+        mesh_collisions_from_visual(root.find(f"link[@name='{side}_gripper_palm']"))
+        for which in ('left', 'right'):
+            mesh_collisions_from_visual(root.find(f"link[@name='{side}_{which}_finger']"))
         # The simulator grasp plugin attaches to this physical palm frame.
         if sim:
             # Gazebo's URDF importer otherwise reduces the wrist/tool/palm fixed
