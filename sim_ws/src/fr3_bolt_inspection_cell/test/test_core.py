@@ -32,7 +32,7 @@ def cloud(yaw=.4, noisy=True):
     rng = np.random.default_rng(712)
     # Visible upper half of a horizontal bolt; denser head and shuffled points.
     points = []
-    for lo, hi, radius in ((-.0125, .0085, .0025), (.0085, .0125, .0045)):
+    for lo, hi, radius in ((-.0175, .0115, .004), (.0115, .0175, .006)):
         x = np.linspace(lo, hi, 65)
         theta = np.linspace(.08, np.pi-.08, 33)
         points.extend([a, radius*np.cos(b), radius*np.sin(b)] for a in x for b in theta)

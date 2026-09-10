@@ -72,7 +72,7 @@ class AssistedGrasp : public gazebo::WorldPlugin {
     // Bolt axis must run along local palm Y; both jaws surround shaft, not head.
     if (std::abs(axis.Y()) < .97) return false;
     const double t = -rel.Pos().Y()/axis.Y();
-    if (t < -.010 || t > .007) return false;  // 25 mm bolt, head starts at +8.5 mm
+    if (t < -.014 || t > .010) return false;  // 35 mm bolt, keep both jaws on its shaft
     const auto point = rel.Pos()+axis*t;
     if (std::abs(point.Z()-.149) > .003 || std::abs(point.X()) > .0018) return false;
     auto left = robot->GetJoint(side+"_left_finger_joint");

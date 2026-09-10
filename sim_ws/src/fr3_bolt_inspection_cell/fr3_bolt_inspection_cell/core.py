@@ -39,11 +39,13 @@ def validate(cfg):
             raise ValueError(key+' must be positive')
     if not (0 < cfg['close_width'] < 2*cfg['shaft_radius'] < cfg['open_width'] <= .10):
         raise ValueError('Invalid jaw widths')
-    # The assisted plugin and supplied narrow jaws are calibrated to this bolt.
-    expected = {'bolt_length': .025, 'shaft_radius': .0025,
-                'head_radius': .0045, 'head_length': .004, 'grasp_offset': .006}
-    if any(abs(cfg[k]-v) > 1e-9 for k, v in expected.items()):
-        raise ValueError('Recalibrate sim_grasp.cpp and fingertips for different part dimensions')
+    if not (0 < cfg['head_length'] < cfg['bolt_length'] <= .10):
+        raise ValueError('Require 0 < head_length < bolt_length <= .10 m')
+    if not (0 < cfg['shaft_radius'] < cfg['head_radius'] <= .03):
+        raise ValueError('Require shaft_radius < head_radius <= .03 m')
+    shaft_length = cfg['bolt_length']-cfg['head_length']
+    if not 0 < cfg['grasp_offset'] < shaft_length/2:
+        raise ValueError('grasp_offset must lie inside the shaft, on either side of centre')
     if not (3 <= cfg['minimum_views'] <= len(cfg['views_deg'])):
         raise ValueError('Require at least three views')
     if any(len(v) != 3 for v in cfg['views_deg']):
@@ -110,7 +112,7 @@ def estimate_bolt(points, cfg):
         along, across = cloud@axis, cloud@lateral
         lo, hi = np.quantile(along, [.01, .99])
         width = np.quantile(across, .99)-np.quantile(across, .01)
-        if not (.018 <= hi-lo <= .030 and .002 <= width <= .012):
+        if not (.028 <= hi-lo <= .042 and .003 <= width <= .016):
             continue
         ends = [across[along < lo+.005], across[along > hi-.005]]
         spans = [np.ptp(e) if len(e) >= 4 else 0 for e in ends]
@@ -136,7 +138,7 @@ def estimate_bolt(points, cfg):
 
 
 def grasp_in_object(offset, below=False):
-    """T_object_tcp: jaws close along object Y; narrow tip runs along object X."""
+    """T_object_tcp: the jaws close along object Y at an axial offset."""
     result = np.eye(4)
     result[:3, :3] = [[0, 1, 0], [-1 if below else 1, 0, 0], [0, 0, 1 if below else -1]]
     result[:3, 3] = [offset, 0, 0]

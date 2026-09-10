@@ -37,8 +37,8 @@ def load_scene(path):
             raise ValueError('bolts.rows and cols must be positive integers')
     if b['rows'] * b['cols'] > 200:
         raise ValueError('Limit the scene to 200 dynamic bolts')
-    if not 0 < b['head_length'] < b['length'] < 0.03:
-        raise ValueError('Require 0 < head_length < total bolt length < 0.03 m')
+    if not 0 < b['head_length'] < b['length'] < 0.10:
+        raise ValueError('Require 0 < head_length < total bolt length < 0.10 m')
     if not 0 < b['shaft_radius'] < b['head_radius'] < 0.015:
         raise ValueError('Require shaft_radius < head_radius < 0.015 m')
     if b['density'] <= 0 or b['spawn_clearance'] < 0:
