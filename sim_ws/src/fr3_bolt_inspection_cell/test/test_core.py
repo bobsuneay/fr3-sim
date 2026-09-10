@@ -84,28 +84,31 @@ def test_sim_clock_deadline_accepts_slow_simulation_and_detects_stalls():
         deadline.check(108.1, 11.0)
 
 
-def test_original_hkv_fingers_use_mesh_collision_geometry():
+def test_simplified_hkv_body_keeps_only_fingertip_mesh_collision():
     root, _ = robot('mock')
     for side in ('left', 'right'):
-        for part in ('gripper_palm', 'left_finger', 'right_finger'):
+        palm = root.find(f"link[@name='{side}_gripper_palm']")
+        assert len(palm.findall('collision')) == 2
+        assert all(c.find('geometry/box') is not None for c in palm.findall('collision'))
+        assert not palm.findall('collision/geometry/mesh')
+        for part in ('left_finger', 'right_finger'):
             link = root.find(f"link[@name='{side}_{part}']")
-            visuals = {v.find('geometry/mesh').get('filename') for v in link.findall('visual')
-                       if v.find('geometry/mesh') is not None}
-            collisions = {v.find('geometry/mesh').get('filename') for v in link.findall('collision')
-                          if v.find('geometry/mesh') is not None}
-            assert visuals
-            assert collisions == visuals
-            assert not any(v.find('geometry/box') is not None for v in link.findall('collision'))
-            if part.endswith('finger'):
-                contact = root.find(f"gazebo[@reference='{side}_{part}']")
-                assert contact.findtext('selfCollide') == 'false'
-                assert contact.findtext('kd') == '80'
-                joint = next(j for j in root.findall('joint')
-                             if j.find('child') is not None and
-                             j.find('child').get('link') == f'{side}_{part}')
-                joint = joint.find('dynamics')
-                assert float(joint.get('damping')) == pytest.approx(15.0)
-                assert float(joint.get('friction')) == pytest.approx(.40)
+            collisions = link.findall('collision')
+            assert len(collisions) == 2
+            assert sum(c.find('geometry/box') is not None for c in collisions) == 1
+            meshes = [c.find('geometry/mesh').get('filename') for c in collisions
+                      if c.find('geometry/mesh') is not None]
+            assert meshes == [f'package://fr3_dual_bolt_cell/meshes/hkv_tg9801/finger.stl']
+            assert not any('slider.stl' in name for name in meshes)
+            contact = root.find(f"gazebo[@reference='{side}_{part}']")
+            assert contact.findtext('selfCollide') == 'false'
+            assert contact.findtext('kd') == '80'
+            joint = next(j for j in root.findall('joint')
+                         if j.find('child') is not None and
+                         j.find('child').get('link') == f'{side}_{part}')
+            joint = joint.find('dynamics')
+            assert float(joint.get('damping')) == pytest.approx(15.0)
+            assert float(joint.get('friction')) == pytest.approx(.40)
 
 
 def test_gazebo_mount_links_do_not_self_collide_with_fixed_wrist_chain():

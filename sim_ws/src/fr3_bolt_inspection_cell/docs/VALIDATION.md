@@ -49,7 +49,7 @@ OBB 是保守包围盒；盒子分离能证明对应几何分离，盒子相交�
 8. 检查左手检测结束后保留夹持、报告实际完成/不可达视角。逐张查看 RGB/深度，确认零件可见；当前只自动检查中心投影在检测相机视野内，**不会自动证明夹爪没有遮挡每个表面**。
 9. 分别测试停止按钮、点云中断、关节反馈中断、Gazebo 暂停、相机停止发布、接收手未到位、某个视角规划失败。应取消运动或拒绝开始，不能因失败自动松开零件。
 
-10. 启动后观察两个夹爪至少 10 秒；手指应在目标位置稳定保持，不应因 CAD 自碰撞连续振荡。inspection 包会把手指 `selfCollide` 设为 false，并将接触阻尼设为 80；若仍抖动，再检查对应 `FollowJointTrajectory`/`GripperCommand` 控制器是否重复发送目标。
+10. 启动后观察两个夹爪至少 10 秒；手指应在目标位置稳定保持，不应因 CAD 自碰撞连续振荡。inspection 包会把安装件和手指 `selfCollide` 设为 false，并将接触阻尼设为 80；主体和滑轨使用简化盒体，只有指尖保留 `finger.stl` 碰撞。若仍抖动，再检查对应 `FollowJointTrajectory`/`GripperCommand` 控制器是否重复发送目标。
 
 若发现机械臂末端与 HKV 法兰之间抖动或看起来相对滑动，检查生成日志中的临时 URDF。当前 inspection 包还会对 `tool0`、`gripper_palm`、TCP 和两根手指设置 `selfCollide=false`，并对 `wrist_to_tool`、`tool_to_gripper` 设置 `preserveFixedJoint=true`。前者消除安装网格与腕部的内部接触冲量，后者保留 Gazebo 中的刚性安装链；这些设置不会关闭夹爪与螺丝或桌面的碰撞。更新后必须清理旧的 `build/ install/ log/`，重新编译并 source 新安装空间，否则仍可能加载旧 URDF。
 
@@ -65,7 +65,7 @@ OBB 是保守包围盒；盒子分离能证明对应几何分离，盒子相交�
 | 文件 | 职责 |
 |---|---|
 | `launch/bringup.launch.py` | 组装模型/世界，按控制器就绪顺序启动 MoveIt、任务节点和面板 |
-| `fr3_bolt_inspection_cell/model.py` | 原始 HKV 网格碰撞、三个相机、支架、光学坐标和世界插件 |
+| `fr3_bolt_inspection_cell/model.py` | HKV 视觉网格、主体/滑轨盒体碰撞、指尖网格碰撞、三个相机、支架、光学坐标和世界插件 |
 | `core.py` | 点云聚类/PCA、头尾判断、刚体变换、零件中心插值、时间计算 |
 | `ros_io.py` | TF、MoveIt 服务/动作、夹爪控制、场景附着、超时与取消 |
 | `task_node.py` | 完整流程、数据新鲜度、图像采集、状态与报告 |

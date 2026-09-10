@@ -6,18 +6,30 @@ from fr3_dual_bolt_cell.model import element, fixed, box, inertial
 from .core import validate
 
 
-def mesh_collisions_from_visual(link):
-    """Use the supplied HKV CAD mesh for collision as well as display."""
+def simplified_hkv_collisions(link, boxes, keep_mesh=None):
+    """Replace unstable CAD collisions with boxes plus an optional tip mesh.
+
+    The palm and finger sliders use the same simple collision proxies as the
+    dual bolt cell.  Only ``finger.stl`` is retained on each moving finger so
+    the two actual gripping tips still have their HKV shape.
+    """
     for collision in list(link.findall('collision')):
         link.remove(collision)
+    for size, xyz in boxes:
+        box(link, size, xyz)
+    if keep_mesh is None:
+        return
     for visual in link.findall('visual'):
-        if visual.find('geometry/mesh') is None:
+        mesh = visual.find('geometry/mesh')
+        if mesh is None or not mesh.get('filename', '').endswith('/'+keep_mesh):
             continue
         collision = deepcopy(visual)
         collision.tag = 'collision'
         for material in list(collision.findall('material')):
             collision.remove(material)
         link.append(collision)
+        return
+    raise ValueError(f'Expected {keep_mesh} visual on {link.get("name")}')
 
 
 def stabilize_gripper_contacts(root, side):
@@ -77,11 +89,17 @@ def augment(root, cfg, sim):
         tool = root.find(f"link[@name='{side}_tool0']")
         if tool.find('inertial') is None:
             inertial(tool, .01, (.02, .02, .01))
-        # Keep the original HKV palm and fingers. Their CAD meshes are used
-        # directly for collision, avoiding oversized rectangular proxies.
-        mesh_collisions_from_visual(root.find(f"link[@name='{side}_gripper_palm']"))
+        # Keep the stable dual-cell proxies for the mounting body and rail.
+        # Only the two moving fingertip meshes remain detailed for grasping.
+        simplified_hkv_collisions(
+            root.find(f"link[@name='{side}_gripper_palm']"),
+            [((.16, .0705, .0615), (0, .00325, .03075)),
+             ((.155, .007, .0048), (0, 0, .0694))])
         for which in ('left', 'right'):
-            mesh_collisions_from_visual(root.find(f"link[@name='{side}_{which}_finger']"))
+            simplified_hkv_collisions(
+                root.find(f"link[@name='{side}_{which}_finger']"),
+                [((.024, .017, .0065), (0, 0, .00485))],
+                keep_mesh='finger.stl')
         stabilize_gripper_contacts(root, side)
         # The simulator grasp plugin attaches to this physical palm frame.
         if sim:
