@@ -327,6 +327,10 @@ class IO:
             raise RuntimeError('Gripper trajectory failed: '+result.error_string)
         state = self.state().joint_state
         measured = [state.position[state.name.index(j)] for j in goal.trajectory.joint_names]
+        self.n.get_logger().info(
+            f'Gripper settled: side={side}, requested_gap={width:.4f} m, '
+            f'joint_targets=({width/2:.4f}, {width/2:.4f}), '
+            f'measured=({measured[0]:.4f}, {measured[1]:.4f})')
         if max(abs(v-width/2) for v in measured) > .0015:
             raise RuntimeError('Gripper position feedback did not reach target')
 

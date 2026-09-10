@@ -100,6 +100,12 @@ def test_original_hkv_fingers_use_mesh_collision_geometry():
                 contact = root.find(f"gazebo[@reference='{side}_{part}']")
                 assert contact.findtext('selfCollide') == 'false'
                 assert contact.findtext('kd') == '80'
+                joint = next(j for j in root.findall('joint')
+                             if j.find('child') is not None and
+                             j.find('child').get('link') == f'{side}_{part}')
+                joint = joint.find('dynamics')
+                assert float(joint.get('damping')) == pytest.approx(15.0)
+                assert float(joint.get('friction')) == pytest.approx(.40)
 
 
 def test_grasp_config_remains_valid():

@@ -37,6 +37,19 @@ def stabilize_gripper_contacts(root, side):
             if node is None:
                 node = element(gazebo, tag)
             node.text = value
+        joint = root.find(f"joint[@name='{reference}_joint']")
+        if joint is None:
+            # Also support the scalar/mimic HKV layout while keeping the same
+            # contact stabilization for its physical finger child link.
+            joint = next((candidate for candidate in root.findall('joint')
+                          if candidate.find('child') is not None and
+                          candidate.find('child').get('link') == reference), None)
+        if joint is not None:
+            dynamics = joint.find('dynamics')
+            if dynamics is None:
+                dynamics = element(joint, 'dynamics')
+            dynamics.set('damping', '15.0')
+            dynamics.set('friction', '0.40')
 
 
 def augment(root, cfg, sim):
