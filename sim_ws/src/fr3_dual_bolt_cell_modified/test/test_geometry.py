@@ -55,7 +55,7 @@ def bounds(root, arms):
             geom = collision.find('geometry')
             mesh = geom.find('mesh')
             if mesh is not None:
-                data = (SHARE/mesh.get('filename').split('package://fr3_dual_bolt_cell/')[1]).read_bytes()
+                data = (SHARE/mesh.get('filename').split('package://fr3_dual_bolt_cell_modified/')[1]).read_bytes()
                 dtype = np.dtype([('normal', '<f4', 3), ('vertices', '<f4', (3, 3)), ('attr', '<u2')])
                 vertices = np.frombuffer(data, dtype=dtype, offset=84)['vertices'].reshape(-1, 3)
                 vertices = vertices * np.array([float(v) for v in mesh.get('scale', '1 1 1').split()])
@@ -87,7 +87,7 @@ def local_collision_boxes(root):
             geometry = collision.find('geometry')
             mesh = geometry.find('mesh')
             if mesh is not None:
-                path = SHARE/mesh.get('filename').split('package://fr3_dual_bolt_cell/')[1]
+                path = SHARE/mesh.get('filename').split('package://fr3_dual_bolt_cell_modified/')[1]
                 dtype = np.dtype([('normal', '<f4', 3), ('vertices', '<f4', (3, 3)), ('attr', '<u2')])
                 v = np.frombuffer(path.read_bytes(), dtype=dtype, offset=84)['vertices'].reshape(-1, 3)
                 v = v*np.array([float(x) for x in mesh.get('scale', '1 1 1').split()])

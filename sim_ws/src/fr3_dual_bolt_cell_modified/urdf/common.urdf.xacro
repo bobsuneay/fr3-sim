@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot name="fairino3_v6_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!-- Explicit paths also allow non-ROS offline Xacro tests. -->
-  <xacro:arg name="scene_file" default="$(find fr3_dual_bolt_cell)/config/scene.yaml"/>
+  <xacro:arg name="scene_file" default="$(find fr3_dual_bolt_cell_modified)/config/scene.yaml"/>
   <xacro:property name="scene" value="${xacro.load_yaml('$(arg scene_file)')}"/>
   <xacro:property name="support" value="${scene['support']}"/>
   <xacro:property name="camera" value="${scene['camera']}"/>

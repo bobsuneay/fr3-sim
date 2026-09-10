@@ -13,7 +13,7 @@ import xacro
 import yaml
 
 SIDES = ('left', 'right')
-PACKAGE = 'fr3_dual_bolt_cell'
+PACKAGE = 'fr3_dual_bolt_cell_modified'
 
 
 def read_yaml(path):

@@ -24,7 +24,7 @@
 ```bash
 source /opt/ros/humble/setup.bash
 mkdir -p ~/fr3_dual_driver_ws/src
-python3 ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell/tools/prepare_driver.py \
+python3 ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell_modified/tools/prepare_driver.py \
   --source ~/vendor/frcobot_ros2-v3.0.0_robotV3.9.7/fairino_hardware_v3_9_7 \
   --destination ~/fr3_dual_driver_ws/src/fairino_hardware_v3_9_7
 cp -r ~/vendor/frcobot_ros2-v3.0.0_robotV3.9.7/fairino_msgs ~/fr3_dual_driver_ws/src/
@@ -49,9 +49,9 @@ source install/setup.bash
 ## 3. 配置现场数据
 
 ```bash
-cp ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell/config/hardware.example.yaml ~/fr3_dual.hardware.yaml
-cp ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell/config/arms.yaml ~/fr3_dual.arms.yaml
-cp ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell/config/scene.yaml ~/fr3_dual.scene.yaml
+cp ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell_modified/config/hardware.example.yaml ~/fr3_dual.hardware.yaml
+cp ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell_modified/config/arms.yaml ~/fr3_dual.arms.yaml
+cp ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell_modified/config/scene.yaml ~/fr3_dual.scene.yaml
 ```
 
 填写两个 `robot_ip`，两个实际 `serial_port`，优先使用 `/dev/serial/by-id/...` 固定设备名。
@@ -80,7 +80,7 @@ source /opt/ros/humble/setup.bash
 source ~/fr3_dual_driver_ws/install/setup.bash
 source ~/fr3-sim/sim_ws/install/setup.bash
 export ROS_DOMAIN_ID=32
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=real \
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=real \
   hardware:=$HOME/fr3_dual.hardware.yaml arms:=$HOME/fr3_dual.arms.yaml \
   scene:=$HOME/fr3_dual.scene.yaml enable_execution:=false
 ```
@@ -88,7 +88,7 @@ ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=real \
 另一个相同环境的终端：
 
 ```bash
-ros2 run fr3_dual_bolt_cell check_feedback --timeout 30
+ros2 run fr3_dual_bolt_cell_modified check_feedback --timeout 30
 ros2 control list_controllers -c /left_controller_manager
 ros2 control list_controllers -c /right_controller_manager
 ros2 control list_hardware_interfaces -c /left_controller_manager

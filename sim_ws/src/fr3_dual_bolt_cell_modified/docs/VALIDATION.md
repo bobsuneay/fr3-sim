@@ -38,8 +38,8 @@ Ubuntu 复测：
 ```bash
 cd ~/fr3-sim/sim_ws
 export FR3_VENDOR_DRIVER=$HOME/vendor/frcobot_ros2-v3.0.0_robotV3.9.7/fairino_hardware_v3_9_7
-PYTHONPATH=$PWD/src/fr3_dual_bolt_cell /usr/bin/python3 -m pytest src/fr3_dual_bolt_cell/test -q
-colcon test --packages-select fr3_dual_bolt_cell
+PYTHONPATH=$PWD/src/fr3_dual_bolt_cell_modified /usr/bin/python3 -m pytest src/fr3_dual_bolt_cell_modified/test -q
+colcon test --packages-select fr3_dual_bolt_cell_modified
 colcon test-result --verbose
 ```
 

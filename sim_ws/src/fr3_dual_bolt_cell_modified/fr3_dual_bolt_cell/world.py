@@ -244,7 +244,7 @@ def main():
     args = parser.parse_args()
     if args.scene is None:
         from ament_index_python.packages import get_package_share_directory
-        args.scene = Path(get_package_share_directory('fr3_dual_bolt_cell'))/'config/scene.yaml'
+        args.scene = Path(get_package_share_directory('fr3_dual_bolt_cell_modified'))/'config/scene.yaml'
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(world_xml(load_scene(args.scene)), encoding='utf-8')
     print(args.output)

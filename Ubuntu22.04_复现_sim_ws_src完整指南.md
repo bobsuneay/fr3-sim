@@ -13,7 +13,7 @@
 | `fr3_dual_bolt_cell_modified` | 左手指主驱动、右手指 mimic 的修改版 |
 | `fr3_real_bringup` | 单台正装 FR3 真机或 mock |
 
-`fr3_dual_bolt_cell_modified` 与原 `fr3_dual_bolt_cell` 的 `package.xml` 包名相同，不能在同一个 colcon 源空间同时构建。修改版请使用单独工作空间。
+`fr3_dual_bolt_cell_modified` 已使用独立的 ROS 包名，可与原 `fr3_dual_bolt_cell` 放在同一个 `sim_ws/src` 中同时构建。Python 模块目录仍为 `fr3_dual_bolt_cell`，因此源码导入路径不变。
 
 ## 1. 系统和 ROS 2
 
@@ -110,11 +110,11 @@ source /opt/ros/humble/setup.bash
 source ~/fr3-sim/sim_ws/install/setup.bash
 export ROS_DOMAIN_ID=31
 
-ros2 launch fr3_dual_bolt_cell bringup.launch.py \
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py \
   mode:=gazebo enable_execution:=true
 
 # 停止上一套 launch 后，也可以运行无 Gazebo mock
-ros2 launch fr3_dual_bolt_cell bringup.launch.py \
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py \
   mode:=mock enable_execution:=true
 ```
 
@@ -123,13 +123,13 @@ ros2 launch fr3_dual_bolt_cell bringup.launch.py \
 ```bash
 ros2 control list_controllers
 ros2 action list -t | grep -E 'follow_joint_trajectory|gripper_controller/command'
-ros2 run fr3_dual_bolt_cell check_feedback --timeout 30
-ros2 run fr3_dual_bolt_cell gripper --arm left --width 0.020
+ros2 run fr3_dual_bolt_cell_modified check_feedback --timeout 30
+ros2 run fr3_dual_bolt_cell_modified gripper --arm left --width 0.020
 ```
 
 ## 5. 修改版双臂包
 
-修改版目录在仓库的 `sim_ws/src/fr3_dual_bolt_cell_modified`，但不能和原包一起构建。推荐复制到干净工作空间：
+修改版目录在仓库的 `sim_ws/src/fr3_dual_bolt_cell_modified`，可直接与原包一起构建：
 
 ```bash
 mkdir -p ~/fr3_modified_ws/src
@@ -138,10 +138,10 @@ cp -a ~/fr3-sim/sim_ws/src/fr3_dual_bolt_cell_modified \
 cd ~/fr3_modified_ws
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -r -y --rosdistro humble
-colcon build --symlink-install --packages-select fr3_dual_bolt_cell
+colcon build --symlink-install --packages-select fr3_dual_bolt_cell_modified
 source install/setup.bash
 export ROS_DOMAIN_ID=31
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=mock enable_execution:=true
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=mock enable_execution:=true
 ```
 
 接口定义集中在：
@@ -193,7 +193,7 @@ source /opt/ros/humble/setup.bash
 source ~/fr3_dual_driver_ws/install/setup.bash
 source ~/fr3-sim/sim_ws/install/setup.bash
 export ROS_DOMAIN_ID=32
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=real \
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=real \
   hardware:=$HOME/fr3_dual.hardware.yaml enable_execution:=false
 ```
 
@@ -205,14 +205,14 @@ ros2 control list_controllers -c /right_controller_manager
 ros2 control list_hardware_interfaces -c /left_controller_manager
 ros2 control list_hardware_interfaces -c /right_controller_manager
 ros2 topic echo /joint_states --once
-ros2 run fr3_dual_bolt_cell check_feedback --timeout 30
+ros2 run fr3_dual_bolt_cell_modified check_feedback --timeout 30
 ```
 
 `enable_execution:=false` 只禁止 MoveIt 执行，不保证厂商驱动完全停止保持指令；它不是急停或物理只读模式。首次真实运动必须低速、空载，并确认现场急停有效。
 
 ## 8. 常见问题和清理
 
-重复包名：把修改版放到 `~/fr3_modified_ws/src`，不要和原包一起放入同一个构建源空间。
+如果仍看到重复包名，请检查是否有旧副本目录；当前修改版的 `package.xml` 必须声明 `fr3_dual_bolt_cell_modified`。
 
 找不到 Xacro 或控制器：
 
@@ -229,6 +229,6 @@ cd ~/fr3-sim/sim_ws
 rm -rf build install log
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -r -y --rosdistro humble
-colcon build --symlink-install --packages-select fr3_dual_bolt_cell
+colcon build --symlink-install --packages-select fr3_dual_bolt_cell_modified
 source install/setup.bash
 ```

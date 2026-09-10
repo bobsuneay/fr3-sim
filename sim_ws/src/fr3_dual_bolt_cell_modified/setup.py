@@ -1,7 +1,7 @@
 from pathlib import Path
 from setuptools import find_packages, setup
 
-name = 'fr3_dual_bolt_cell'
+name = 'fr3_dual_bolt_cell_modified'
 data = [('share/ament_index/resource_index/packages', ['resource/' + name]),
         ('share/' + name, ['package.xml', 'README.md', 'LICENSE', 'THIRD_PARTY.md'])]
 for directory in ('config', 'urdf', 'launch', 'rviz', 'meshes', 'docs', 'tools'):

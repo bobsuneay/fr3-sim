@@ -1,6 +1,6 @@
 # FR3 双臂螺栓工作台：Gazebo / mock / 实机
 
-`fr3_dual_bolt_cell` 是参照 `fr3_bolt_cell` 新建的独立 ROS 2 功能包。
+`fr3_dual_bolt_cell_modified` 是参照 `fr3_bolt_cell` 新建的独立 ROS 2 功能包。
 它把原来立柱右侧的法奥 FR3 扩展成左右两台 FR3，左右各装一只 HKV TG-9801，
 保留头部固定 RGB-D 相机、720 mm 桌面和 20 个总长 25 mm 的动态螺栓。
 原有三个功能包不需要修改，也不要与本包同时启动。
@@ -32,13 +32,13 @@ real 仍读取实机当前状态，不因更新初始配置而自动移动。
 
 ```bash
 # Gazebo 物理仿真，允许 RViz 执行
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=gazebo enable_execution:=true
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=gazebo enable_execution:=true
 
 # 无 Gazebo 的虚拟控制器，检查 MoveIt/控制器链路
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=mock enable_execution:=true
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=mock enable_execution:=true
 
 # 现场完成配置和驱动编译后，启动实机控制
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=real \
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=real \
   hardware:=$HOME/fr3_dual.hardware.yaml enable_execution:=true
 ```
 
@@ -63,11 +63,11 @@ sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-yaml
 cd ~/fr3-sim/sim_ws
 # rosdep 未初始化时先执行一次 sudo rosdep init
 rosdep update
-rosdep install --from-paths src/fr3_dual_bolt_cell --ignore-src -r -y --rosdistro humble
-/usr/bin/python3 /usr/bin/colcon build --symlink-install --packages-select fr3_dual_bolt_cell
+rosdep install --from-paths src/fr3_dual_bolt_cell_modified --ignore-src -r -y --rosdistro humble
+/usr/bin/python3 /usr/bin/colcon build --symlink-install --packages-select fr3_dual_bolt_cell_modified
 source install/setup.bash
 export ROS_DOMAIN_ID=31
-ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=gazebo enable_execution:=true
+ros2 launch fr3_dual_bolt_cell_modified bringup.launch.py mode:=gazebo enable_execution:=true
 ```
 
 退出 Conda 后加载 ROS，避免系统 ROS 模块被 Conda Python 遮蔽。
@@ -80,10 +80,10 @@ ros2 launch fr3_dual_bolt_cell bringup.launch.py mode:=gazebo enable_execution:=
 source /opt/ros/humble/setup.bash
 source ~/fr3-sim/sim_ws/install/setup.bash
 export ROS_DOMAIN_ID=31
-ros2 run fr3_dual_bolt_cell check_feedback --timeout 30
+ros2 run fr3_dual_bolt_cell_modified check_feedback --timeout 30
 ros2 control list_controllers -c /controller_manager
-ros2 run fr3_dual_bolt_cell gripper --arm left --width 0.030
-ros2 run fr3_dual_bolt_cell gripper --arm right --width 0.010
+ros2 run fr3_dual_bolt_cell_modified gripper --arm left --width 0.030
+ros2 run fr3_dual_bolt_cell_modified gripper --arm right --width 0.010
 ```
 
 `--width` 是内侧净开口，单位米；默认范围 0～30 mm。所有后端都使用同一个
@@ -92,7 +92,7 @@ real 后端再由 `ros2_hkv_gripper/GripperHardwareInterface` 转换为现场配
 例如：
 
 ```bash
-ros2 run fr3_dual_bolt_cell gripper --arm left --width 0.020
+ros2 run fr3_dual_bolt_cell_modified gripper --arm left --width 0.020
 ```
 
 所有后端的 URDF 都只导出 `left_gripper_left_finger_joint`/

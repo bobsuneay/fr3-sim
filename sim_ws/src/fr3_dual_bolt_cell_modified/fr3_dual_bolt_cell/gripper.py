@@ -26,7 +26,7 @@ def main():
     parser.add_argument('--arm', choices=['left', 'right'], required=True)
     parser.add_argument('--width', type=float, required=True, help='Inner gap in metres')
     parser.add_argument('--arms', type=Path, default=Path(get_package_share_directory(
-        'fr3_dual_bolt_cell'))/'config/arms.yaml')
+        'fr3_dual_bolt_cell_modified'))/'config/arms.yaml')
     opts = parser.parse_args()
     cfg = read_yaml(opts.arms)
     g = validate_arms(cfg)['gripper']

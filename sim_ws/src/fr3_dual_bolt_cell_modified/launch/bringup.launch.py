@@ -22,7 +22,7 @@ from fr3_dual_bolt_cell.world import load_scene, world_xml
 
 
 def start(context):
-    share = Path(get_package_share_directory('fr3_dual_bolt_cell'))
+    share = Path(get_package_share_directory('fr3_dual_bolt_cell_modified'))
     arg = lambda name: LaunchConfiguration(name).perform(context)
     mode = arg('mode')
     if mode not in ('gazebo', 'mock', 'real'):
@@ -66,9 +66,9 @@ def start(context):
     root = build_model(share, scene_path, arms, mode, combined, hardware)
     for mesh in root.iter('mesh'):
         uri = mesh.get('filename')
-        if not uri.startswith('package://fr3_dual_bolt_cell/'):
+        if not uri.startswith('package://fr3_dual_bolt_cell_modified/'):
             raise ValueError(f'Unexpected mesh URI: {uri}')
-        if not (share/uri.removeprefix('package://fr3_dual_bolt_cell/')).is_file():
+        if not (share/uri.removeprefix('package://fr3_dual_bolt_cell_modified/')).is_file():
             raise FileNotFoundError(uri)
     xml = ET.tostring(root, encoding='unicode')
     (run/'robot.urdf').write_text(xml, encoding='utf-8')
@@ -87,7 +87,7 @@ def start(context):
                name='robot_state_publisher', parameters=[description], output='screen')
     group = Node(package='moveit_ros_move_group', executable='move_group',
                  parameters=[moveit], output='screen')
-    scene_node = Node(package='fr3_dual_bolt_cell', executable='publish_scene', prefix='/usr/bin/python3',
+    scene_node = Node(package='fr3_dual_bolt_cell_modified', executable='publish_scene', prefix='/usr/bin/python3',
                       parameters=[{'scene_file': str(scene_path), 'use_sim_time': sim}], output='screen')
     rviz = Node(package='rviz2', executable='rviz2', parameters=[moveit],
                 arguments=['-d', str(share/'rviz/cell.rviz')], output='screen',
@@ -154,7 +154,7 @@ def start(context):
 
 
 def generate_launch_description():
-    share = Path(get_package_share_directory('fr3_dual_bolt_cell'))
+    share = Path(get_package_share_directory('fr3_dual_bolt_cell_modified'))
     return LaunchDescription([
         DeclareLaunchArgument('mode', default_value='gazebo', choices=['gazebo', 'mock', 'real']),
         DeclareLaunchArgument('enable_execution', default_value='false'),

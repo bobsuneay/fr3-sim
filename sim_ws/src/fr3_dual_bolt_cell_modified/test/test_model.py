@@ -51,7 +51,7 @@ def test_complete_tree_and_assets(arms, hardware, mode):
             link = parents[link]
         assert link == 'world'
     for mesh in root.iter('mesh'):
-        assert (SHARE/mesh.get('filename').removeprefix('package://fr3_dual_bolt_cell/')).is_file()
+        assert (SHARE/mesh.get('filename').removeprefix('package://fr3_dual_bolt_cell_modified/')).is_file()
 
 
 @pytest.mark.parametrize('mode', ['gazebo', 'mock', 'real'])
