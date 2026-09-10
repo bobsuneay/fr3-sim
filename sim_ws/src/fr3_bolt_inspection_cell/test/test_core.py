@@ -108,6 +108,20 @@ def test_original_hkv_fingers_use_mesh_collision_geometry():
                 assert float(joint.get('friction')) == pytest.approx(.40)
 
 
+def test_gazebo_mount_links_do_not_self_collide_with_fixed_wrist_chain():
+    root, _ = robot('gazebo')
+    for side in ('left', 'right'):
+        for part in ('tool0', 'gripper_palm', 'gripper_tcp',
+                     'left_finger', 'right_finger'):
+            gazebo = root.find(f"gazebo[@reference='{side}_{part}']")
+            assert gazebo is not None
+            assert gazebo.findtext('selfCollide') == 'false'
+        for joint in ('wrist_to_tool', 'tool_to_gripper'):
+            gazebo = root.find(
+                f"gazebo[@reference='{side}_{joint}']/preserveFixedJoint")
+            assert gazebo is not None and gazebo.text == 'true'
+
+
 def test_grasp_config_remains_valid():
     # The grasp gate still validates the original controller opening range.
     c = config()

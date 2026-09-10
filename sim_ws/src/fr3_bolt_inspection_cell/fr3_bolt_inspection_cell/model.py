@@ -21,16 +21,32 @@ def mesh_collisions_from_visual(link):
 
 
 def stabilize_gripper_contacts(root, side):
-    """Prevent tiny CAD self-contacts from exciting Gazebo finger joints."""
+    """Prevent CAD self-contacts from exciting the fixed mount or fingers.
+
+    The HKV flange mesh overlaps the last FR3 wrist link by design: it is a
+    mounting surface, not a physical clearance gap.  Gazebo otherwise applies
+    contact impulses between those links while also enforcing the fixed
+    wrist/tool/palm joints.  The resulting constraint/contact feedback looks
+    like the flange is sliding.  ``selfCollide`` only disables collisions
+    between links in this robot; contacts against the bolt, table and other
+    models remain enabled.
+    """
+    for link_name in (f'{side}_tool0', f'{side}_gripper_palm',
+                      f'{side}_gripper_tcp', f'{side}_left_finger',
+                      f'{side}_right_finger'):
+        gazebo = root.find(f"gazebo[@reference='{link_name}']")
+        if gazebo is None:
+            gazebo = element(root, 'gazebo', reference=link_name)
+        self_collide = gazebo.find('selfCollide')
+        if self_collide is None:
+            self_collide = element(gazebo, 'selfCollide')
+        self_collide.text = 'false'
+
     for which in ('left', 'right'):
         reference = f'{side}_{which}_finger'
         gazebo = root.find(f"gazebo[@reference='{reference}']")
         if gazebo is None:
             gazebo = element(root, 'gazebo', reference=reference)
-        self_collide = gazebo.find('selfCollide')
-        if self_collide is None:
-            self_collide = element(gazebo, 'selfCollide')
-        self_collide.text = 'false'
         for tag, value in (('mu1', '0.35'), ('mu2', '0.35'),
                            ('kp', '30000'), ('kd', '80')):
             node = gazebo.find(tag)

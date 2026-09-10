@@ -51,6 +51,8 @@ OBB 是保守包围盒；盒子分离能证明对应几何分离，盒子相交�
 
 10. 启动后观察两个夹爪至少 10 秒；手指应在目标位置稳定保持，不应因 CAD 自碰撞连续振荡。inspection 包会把手指 `selfCollide` 设为 false，并将接触阻尼设为 80；若仍抖动，再检查对应 `FollowJointTrajectory`/`GripperCommand` 控制器是否重复发送目标。
 
+若发现机械臂末端与 HKV 法兰之间抖动或看起来相对滑动，检查生成日志中的临时 URDF。当前 inspection 包还会对 `tool0`、`gripper_palm`、TCP 和两根手指设置 `selfCollide=false`，并对 `wrist_to_tool`、`tool_to_gripper` 设置 `preserveFixedJoint=true`。前者消除安装网格与腕部的内部接触冲量，后者保留 Gazebo 中的刚性安装链；这些设置不会关闭夹爪与螺丝或桌面的碰撞。更新后必须清理旧的 `build/ install/ log/`，重新编译并 source 新安装空间，否则仍可能加载旧 URDF。
+
 ## 需要注意的机构限制
 
 - 默认桌面俯抓解接近腕部奇异姿态。离线检查找到了连续的 50 mm 接近列，但实际 KDL 求解与轨迹插值必须检查关节连续性。当前仿真允许单步关节变化不超过 0.20 rad，并在日志中报告实际最大值；真实机器人使用前应重新收紧并验证该上限。
