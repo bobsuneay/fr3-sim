@@ -311,7 +311,9 @@ class Inspection(Node):
                 f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
                 f'{above[2, 3]:.4f}), grasp=({target[0, 3]:.4f}, {target[1, 3]:.4f}, '
                 f'{target[2, 3]:.4f}), descent={self.cfg["approach_height"]:.3f} m')
-            self.io.global_move(first, above)
+            # A reachable above-pick pose can be on an IK branch that cannot
+            # descend. Check its full continuation before moving to that pose.
+            self.io.global_move(first, above, continuation=target)
             self.publish('DESCEND', 'Straight downward approach at configured slow speed')
             self.io.cartesian(first, [target], self.cfg['descent_speed'])
             self.publish('GRASP', 'Close jaws; validate shaft enclosure before assisted attachment')

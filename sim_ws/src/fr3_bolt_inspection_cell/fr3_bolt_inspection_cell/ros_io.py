@@ -1,4 +1,5 @@
 """MoveIt Humble service/action adapter with simulation-clock-aware execution."""
+from copy import deepcopy
 import threading
 import time
 import numpy as np
@@ -10,8 +11,9 @@ from geometry_msgs.msg import Pose
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import (AllowedCollisionEntry, AttachedCollisionObject, CollisionObject,
     Constraints, JointConstraint, OrientationConstraint, PlanningScene, PlanningSceneComponents,
-    PositionConstraint, RobotState)
-from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetPlanningScene, GetPositionFK
+    PositionConstraint, RobotState, RobotTrajectory)
+from moveit_msgs.srv import (ApplyPlanningScene, GetCartesianPath, GetPlanningScene,
+                             GetPositionFK, GetPositionIK, GetStateValidity)
 from rclpy.action import ActionClient
 from rclpy.duration import Duration as RclDuration
 from rclpy.time import Time
@@ -21,6 +23,7 @@ from std_srvs.srv import SetBool, Trigger
 from gazebo_msgs.srv import GetEntityState
 from trajectory_msgs.msg import JointTrajectoryPoint
 from .core import SimClockDeadline, segment_times
+from .cartesian import CartesianPlanningError, seeded_path
 
 
 class PlanningFailure(RuntimeError):
@@ -57,6 +60,8 @@ class IO:
             f'/{s}_gripper_controller/follow_joint_trajectory') for s in ('left', 'right')}
         self.cart = node.create_client(GetCartesianPath, '/compute_cartesian_path')
         self.fk = node.create_client(GetPositionFK, '/compute_fk')
+        self.ik = node.create_client(GetPositionIK, '/compute_ik')
+        self.validity = node.create_client(GetStateValidity, '/check_state_validity')
         self.apply = node.create_client(ApplyPlanningScene, '/apply_planning_scene')
         self.scene = node.create_client(GetPlanningScene, '/get_planning_scene')
         self.entity = node.create_client(GetEntityState, '/inspection/sim/get_entity_state')
@@ -216,7 +221,7 @@ class IO:
         if result.error_code.val != 1:
             raise RuntimeError(f'Trajectory execution failed: {result.error_code.val}')
 
-    def global_move(self, side, target=None, joints=None):
+    def global_move(self, side, target=None, joints=None, continuation=None):
         goal = MoveGroup.Goal()
         req = goal.request
         req.group_name = side+'_arm'
@@ -253,10 +258,122 @@ class IO:
         goal.planning_options.plan_only = True
         goal.planning_options.planning_scene_diff.is_diff = True
         goal.planning_options.planning_scene_diff.robot_state.is_diff = True
-        result = self.action(self.move, goal, 40, planning_only=True)
-        if result.error_code.val != 1:
-            raise PlanningFailure(f'Pose planning failed: {result.error_code.val}')
-        self.execute(result.planned_trajectory)
+        attempts = 3 if continuation is not None else 1
+        failure = 'No approach trajectory'
+        for attempt in range(1, attempts+1):
+            req.start_state = self.state()
+            result = self.action(self.move, goal, 40, planning_only=True)
+            if result.error_code.val != 1:
+                failure = f'Pose planning failed: {result.error_code.val}'
+                continue
+            if continuation is not None:
+                trajectory = result.planned_trajectory.joint_trajectory
+                if not trajectory.points:
+                    failure = 'Empty approach trajectory'
+                    continue
+                prospective = deepcopy(req.start_state)
+                for name, value in zip(trajectory.joint_names, trajectory.points[-1].positions):
+                    prospective.joint_state.position[prospective.joint_state.name.index(name)] = value
+                self.n.get_logger().info(
+                    f'Pick preflight {attempt}/{attempts}: verifying descent from planned approach endpoint')
+                try:
+                    self.seeded_cartesian(side, prospective, continuation)
+                except PlanningFailure as exc:
+                    failure = str(exc)
+                    self.n.get_logger().warning(f'Approach candidate rejected: {failure}')
+                    continue
+            self.execute(result.planned_trajectory)
+            return
+        raise PlanningFailure(f'Approach planning exhausted {attempts} attempt(s): {failure}; nothing executed')
+
+    def seeded_cartesian(self, side, start, target):
+        """Use timed, seeded IK when the Cartesian service truncates a short move."""
+        names = [f'{side}_j{i}' for i in range(1, 7)]
+        indices = [start.joint_state.name.index(name) for name in names]
+        def state(q):
+            result = deepcopy(start)
+            for i, value in zip(indices, q):
+                result.joint_state.position[i] = float(value)
+            return result
+
+        def validity(robot_state):
+            req = GetStateValidity.Request()
+            req.robot_state = robot_state
+            # Empty group checks the whole robot, including the other arm.
+            response = self.call(self.validity, req)
+            if not response.valid:
+                pairs = sorted({f'{c.contact_body_1} <-> {c.contact_body_2}'
+                                for c in response.contacts})
+                raise CartesianPlanningError('Invalid state: '+(
+                    '; '.join(pairs[:8]) or 'joint bounds/constraints; no contacts returned'))
+
+        def fk(robot_state):
+            req = GetPositionFK.Request()
+            req.header.frame_id = 'world'
+            req.fk_link_names = [side+'_gripper_tcp']
+            req.robot_state = robot_state
+            response = self.call(self.fk, req)
+            if response.error_code.val != 1 or len(response.pose_stamped) != 1:
+                raise CartesianPlanningError('Fallback FK failed')
+            return matrix(response.pose_stamped[0].pose)
+
+        last_report = time.monotonic()
+        def inspect(q):
+            nonlocal last_report
+            robot_state = state(q)
+            validity(robot_state)
+            if time.monotonic()-last_report >= 5:
+                self.n.get_logger().info('Seeded Cartesian preflight: checking IK and collisions; no motion sent')
+                last_report = time.monotonic()
+            return fk(robot_state)
+
+        def solve(target_pose, seed):
+            req = GetPositionIK.Request()
+            req.ik_request.group_name = side+'_arm'
+            req.ik_request.ik_link_name = side+'_gripper_tcp'
+            req.ik_request.robot_state = state(seed)
+            req.ik_request.pose_stamped.header.frame_id = 'world'
+            req.ik_request.pose_stamped.pose = pose(target_pose)
+            req.ik_request.avoid_collisions = True
+            req.ik_request.timeout = duration(.3)
+            req.ik_request.constraints.joint_constraints = [
+                JointConstraint(joint_name=name, position=float(value),
+                                tolerance_above=self.c['joint_step_limit'],
+                                tolerance_below=self.c['joint_step_limit'], weight=1.0)
+                for name, value in zip(names, seed)]
+            response = self.call(self.ik, req)
+            if response.error_code.val != 1:
+                # Diagnostic only: an unconstrained solution is never returned
+                # to the planner/executor. It lets us name actual collision pairs.
+                error = response.error_code.val
+                req.ik_request.avoid_collisions = False
+                req.ik_request.constraints = Constraints()
+                diagnostic = self.call(self.ik, req)
+                if diagnostic.error_code.val == 1:
+                    values = dict(zip(diagnostic.solution.joint_state.name,
+                                      diagnostic.solution.joint_state.position))
+                    validity(state([values[name] for name in names]))
+                raise CartesianPlanningError(
+                    f'Collision-aware IK failed (code={error}); diagnostic IK code='
+                    f'{diagnostic.error_code.val}; no collision-free continuous solution confirmed')
+            values = dict(zip(response.solution.joint_state.name, response.solution.joint_state.position))
+            return [values[name] for name in names]
+
+        self.n.get_logger().info(
+            'Preflighting seeded IK at <=1 mm, '
+            'collision checks ON, raw joint jump guard ON')
+        try:
+            q, frames = seeded_path(
+                [start.joint_state.position[i] for i in indices], fk(start), target,
+                solve, inspect, step=min(.001, self.c['cartesian_step']),
+                joint_limit=self.c['joint_step_limit'])
+        except CartesianPlanningError as exc:
+            raise PlanningFailure(str(exc)) from exc
+        trajectory = RobotTrajectory()
+        trajectory.joint_trajectory.joint_names = names
+        trajectory.joint_trajectory.points = [JointTrajectoryPoint(positions=row.tolist()) for row in q]
+        self.n.get_logger().info(f'Seeded Cartesian preflight complete: fraction=100%, points={len(q)}')
+        return trajectory, q, frames
 
     def cartesian(self, side, waypoints, speed, object_tcp=None, center=None):
         req = GetCartesianPath.Request()
@@ -275,7 +392,7 @@ class IO:
         target = waypoints[-1]
         self.n.get_logger().info(
             f'Cartesian request: side={side}, waypoints={len(waypoints)}, '
-            f'step={req.max_step:.4f} m, jump={req.jump_threshold:.2f} rad, '
+            f'step={req.max_step:.4f} m, relative_jump_factor={req.jump_threshold:.2f}, '
             f'revolute_jump={req.revolute_jump_threshold:.2f} rad, '
             f'avoid_collisions={req.avoid_collisions}, '
             f'target=({target[0, 3]:.4f}, {target[1, 3]:.4f}, {target[2, 3]:.4f})')
@@ -288,7 +405,13 @@ class IO:
             f'Cartesian result: error_code={response.error_code.val}, '
             f'fraction={response.fraction:.1%}, points={len(points)}, '
             f'max_joint_step={max_joint_step:.4f} rad')
-        if response.error_code.val != 1 or response.fraction < .99999:
+        frames = None
+        if response.error_code.val == 1 and response.fraction < .99999 and len(waypoints) == 1:
+            self.n.get_logger().warning('Cartesian service truncated path; trying seeded IK fallback')
+            trajectory, q, frames = self.seeded_cartesian(side, req.start_state, target)
+            points = trajectory.joint_trajectory.points
+            max_joint_step = float(np.max(np.abs(np.diff(q, axis=0)))) if len(q) > 1 else 0.0
+        elif response.error_code.val != 1 or response.fraction < .99999:
             raise PlanningFailure(
                 f'Cartesian path incomplete ({response.fraction:.1%}); '
                 f'error_code={response.error_code.val}, points={len(points)}, '
@@ -298,7 +421,8 @@ class IO:
                 f'Empty path or joint discontinuity; points={len(points)}, '
                 f'max_joint_step={max_joint_step:.4f} rad, '
                 f'limit={self.c["joint_step_limit"]:.4f} rad')
-        frames = self.fk_poses(side, trajectory, req.start_state)
+        if frames is None:
+            frames = self.fk_poses(side, trajectory, req.start_state)
         if object_tcp is not None and center is not None:
             object_poses = [t@np.linalg.inv(object_tcp) for t in frames]
             if max(np.linalg.norm(t[:3, 3]-center) for t in object_poses) > self.c['center_tolerance']:

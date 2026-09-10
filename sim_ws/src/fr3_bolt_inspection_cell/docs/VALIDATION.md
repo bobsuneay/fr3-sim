@@ -31,6 +31,16 @@ OBB 是保守包围盒；盒子分离能证明对应几何分离，盒子相交�
 
 ## 需要在 Ubuntu 上实际执行
 
+### 2026-09-10 下降路径 44.4% 中止反馈
+
+用户日志显示接近轨迹 `SUCCEEDED`，下降服务随后返回 `error_code=1`、`fraction=44.4%`，任务报告 `nothing executed`。该错误码只表示服务计算成功，不能代替路径比例；返回轨迹的 48 个点是时间参数化后的采样，不能用其最大相邻关节差 0.03 rad 排除原始 IK 分支跳变。日志没有给出下降中止位置的碰撞对，因此尚不能断言碰撞或奇异位姿是哪一种根因。
+
+本次加入接近终点的下降预检（最多 3 次接近规划）、单目标笛卡尔段的逐点 IK 备用规划和碰撞对诊断。按最多 1 mm / 0.02 rad 插值目标，给每次 IK 0.3 秒并约束种子附近的关节范围；原始 IK 解跳变大于配置阈值时拒绝。关节段按最多 0.02 rad 采样，使用全机器人状态有效性服务检查碰撞，并通过 FK 检查 TCP 路径偏离（1 mm / 0.02 rad）。这些是离散检查，不能代替 Gazebo 完整抓取验收。保留既有速度、加速度和完整路径要求。
+
+使用 `.tools/python` 中已有的 SciPy/Xacro 隔离依赖进行了测试：新增 11 项通过。以提交 `ab12592` 的双臂依赖生成临时测试快照，当前 39 项通过、2 项失败；对未修改的 `ab12592` 同样测试为 28 项通过、同样 2 项失败，均为闭合初态双指包围盒碰撞的既有几何断言。本次没有调整碰撞模型。ROS 服务及 Gazebo 全任务仍需在 Ubuntu 实测。
+
+MoveIt Humble 参考：[笛卡尔路径服务源码](https://github.com/moveit/moveit2/blob/humble/moveit_ros/move_group/src/default_capabilities/cartesian_path_service_capability.cpp)、[IK 请求定义](https://github.com/moveit/moveit_msgs/blob/ros2/msg/PositionIKRequest.msg)。
+
 1. 按 README 构建，确认 C++ 插件编译、安装和加载成功：
 
    ```bash
@@ -68,6 +78,7 @@ OBB 是保守包围盒；盒子分离能证明对应几何分离，盒子相交�
 | `fr3_bolt_inspection_cell/model.py` | HKV 视觉网格、主体/滑轨盒体碰撞、指尖网格碰撞、三个相机、支架、光学坐标和世界插件 |
 | `core.py` | 点云聚类/PCA、头尾判断、刚体变换、零件中心插值、时间计算 |
 | `ros_io.py` | TF、MoveIt 服务/动作、夹爪控制、场景附着、超时与取消 |
+| `cartesian.py` | 无执行副作用的逐点 IK 路径预检、关节连续性和中间位置校验 |
 | `task_node.py` | 完整流程、数据新鲜度、图像采集、状态与报告 |
 | `handover.py` | 可独立测试的交接顺序 |
 | `panel.py` | 操作按钮、状态、四路 RGB 预览 |
