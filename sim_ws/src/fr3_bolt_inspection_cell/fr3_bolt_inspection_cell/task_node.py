@@ -20,7 +20,7 @@ from tf2_ros import Buffer, TransformListener
 import yaml
 from .core import (validate, estimate_bolt, grasp_in_object, centered_views,
                    interpolate_object, random_disk_xy, transform)
-from .core import table_pick_tcp
+from .core import fingertip_table_pick_tcp
 from .ros_io import IO, PlanningFailure, matrix
 from .handover import transfer
 from .retry import prepare_pick_retry
@@ -376,7 +376,9 @@ class Inspection(Node):
             f'Pick attempt {attempt}/{self.cfg["max_grasp_attempts"]}: waiting for three point-cloud estimates')
         estimate = self.perceive()
         obj = estimate.pose
-        target = table_pick_tcp(obj, -self.cfg['grasp_offset'], self.cfg['grasp_depth_offset'])
+        target = fingertip_table_pick_tcp(
+            obj, -self.cfg['grasp_offset'], self.cfg.get('table_z', .72),
+            self.cfg.get('fingertip_table_clearance', .005))
         donor_grasp = np.linalg.inv(obj)@target
         receiver_grasp = grasp_in_object(self.cfg['grasp_offset'], below=True)
         self.report['estimated_pose'] = obj.tolist()
@@ -396,7 +398,7 @@ class Inspection(Node):
             f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
             f'{above[2, 3]:.4f}), grasp=({target[0, 3]:.4f}, {target[1, 3]:.4f}, '
             f'{target[2, 3]:.4f}), descent={self.cfg["approach_height"]:.3f} m, '
-            f'depth_offset={self.cfg["grasp_depth_offset"]*1000:.1f} mm')
+            f'fingertip_clearance={self.cfg.get("fingertip_table_clearance", .005)*1000:.1f} mm')
         descent = self.io.global_move(first, above, continuation=target)
         self.publish('DESCEND', f'Pick attempt {attempt}: straight downward approach')
         self.io.execute_prepared_cartesian(descent, self.cfg['descent_speed'])

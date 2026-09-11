@@ -68,6 +68,11 @@ class IO:
         self.scene = node.create_client(GetPlanningScene, '/get_planning_scene')
         self.entity = node.create_client(GetEntityState, '/inspection/sim/get_entity_state')
         self.set_entity = node.create_client(SetEntityState, '/inspection/sim/set_entity_state')
+        # gazebo_ros_api_plugin exposes the same services globally on some
+        # Humble installations; keep a fallback so the randomize button works
+        # with either namespacing layout.
+        self.entity_fallback = node.create_client(GetEntityState, '/gazebo/get_entity_state')
+        self.set_entity_fallback = node.create_client(SetEntityState, '/gazebo/set_entity_state')
         self.owner = node.create_client(Trigger, '/inspection/sim/owner')
         self.grasps = {s: node.create_client(SetBool, '/inspection/sim/'+s+'_grasp')
                        for s in ('left', 'right')}
@@ -667,8 +672,9 @@ class IO:
 
     def truth(self):
         # Deliberately isolated from estimate_bolt and from pick pose generation.
-        res = self.call(self.entity, GetEntityState.Request(
-            name=self.c['simulation_entity'], reference_frame='world'))
+        request = GetEntityState.Request(name=self.c['simulation_entity'], reference_frame='world')
+        client = self._available_service((self.entity, getattr(self, 'entity_fallback', None)))
+        res = self.call(client, request)
         if not res.success:
             raise RuntimeError('Simulation verification state unavailable')
         return matrix(res.state.pose)
@@ -680,10 +686,25 @@ class IO:
         request.state.reference_frame = 'world'
         request.state.pose = pose(world_object)
         # A default Twist explicitly removes velocity left by a failed pick.
-        response = self.call(self.set_entity, request)
+        client = self._available_service((self.set_entity, getattr(self, 'set_entity_fallback', None)))
+        response = self.call(client, request)
         if not response.success:
             raise RuntimeError('Gazebo refused object relocation')
         self.object_scene(world_object)
+
+    def _available_service(self, clients):
+        """Return the first advertised service, including Gazebo global fallback."""
+        for client in clients:
+            if client is None:
+                continue
+            if not hasattr(client, 'wait_for_service'):
+                # Lightweight test doubles and custom adapters are already
+                # selected by their caller; do not probe them as ROS clients.
+                return client
+            if client.wait_for_service(timeout_sec=.25):
+                return client
+        names = ', '.join(getattr(c, 'srv_name', '<unknown>') for c in clients)
+        raise RuntimeError('Service unavailable: '+names)
 
     def scene_diff(self, diff):
         diff.is_diff = True

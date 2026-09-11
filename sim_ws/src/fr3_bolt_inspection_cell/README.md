@@ -124,7 +124,7 @@ ros2 service call /inspection/randomize_object std_srvs/srv/Trigger '{}'
 | `center_tolerance` | 0.003 m，规划路径中心误差阈值；仿真运动中也检查中心漂移 |
 | `grasp_reach_tolerance` | 0.003 m，闭合前实际 TCP 的三维到位容差 |
 | `grasp_recovery_max` | 0.025 m，只允许一次完整规划的补降；横向与姿态偏差也须合格 |
-| `grasp_depth_offset` | 0.002 m，首次桌面夹取相对点云估计中心额外向下的深度 |
+| `fingertip_table_clearance` | 0.005 m；根据指尖碰撞代理和 TCP 固定安装偏移反算首次抓取高度，使指尖末端停在桌面上方 5 mm |
 | `grasp_test_lift` | 0.015 m，闭合后的抓取确认试抬高度 |
 | `max_grasp_attempts` | 5，自动重新识别和夹取的最大次数；范围 1–20 |
 | `random_position_center` | `[0.50, -0.20] m`，随机圆心 |

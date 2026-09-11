@@ -58,8 +58,8 @@ def validate(cfg):
         raise ValueError('grasp_test_lift must be less than lift_height')
     if cfg['point_cloud_camera'] not in ('head_camera', 'left_d435i', 'right_d435i'):
         raise ValueError('point_cloud_camera must be head_camera or a wrist D435i')
-    if not 0 <= cfg['grasp_depth_offset'] <= cfg['shaft_radius']:
-        raise ValueError('grasp_depth_offset must be between zero and shaft_radius')
+    if not 0 < cfg['fingertip_table_clearance'] <= .020:
+        raise ValueError('fingertip_table_clearance must be between zero and 20 mm')
     extent = cfg['random_position_radius']+cfg['bolt_length']/2
     centre = np.asarray(cfg['random_position_center'])
     if np.any(centre-extent < np.asarray(cfg['roi_min'][:2])) or np.any(
@@ -185,6 +185,23 @@ def table_pick_tcp(object_pose, axial_offset, depth_offset):
     result = np.asarray(object_pose, dtype=float)@grasp_in_object(axial_offset)
     result = result.copy()
     result[2, 3] -= depth_offset
+    return result
+
+
+def fingertip_table_pick_tcp(object_pose, axial_offset, table_z, clearance,
+                             fingertip_palm_z=.0686, tcp_palm_z=.149):
+    """Place the modeled fingertip at an explicit height above the tabletop.
+
+    The fingertip proxy is measured in the palm frame.  The TCP is fixed
+    ``tcp_palm_z`` metres along that same frame, so solving the transform is
+    more reliable than adding an arbitrary world-Z offset.  The returned pose
+    keeps the estimated bolt orientation and axial grasp point unchanged.
+    """
+    result = np.asarray(object_pose, dtype=float) @ grasp_in_object(axial_offset)
+    tip_in_tcp = np.array([0., 0., fingertip_palm_z-tcp_palm_z, 1.])
+    tip_world = result @ tip_in_tcp
+    result = result.copy()
+    result[2, 3] += table_z + clearance - tip_world[2]
     return result
 
 

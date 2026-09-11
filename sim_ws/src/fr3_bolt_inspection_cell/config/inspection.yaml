@@ -15,8 +15,8 @@ shaft_radius: 0.004
 head_radius: 0.006
 head_length: 0.006
 grasp_offset: 0.010
-# Lower the first pick TCP below the estimated centre so the fingertips surround the shaft.
-grasp_depth_offset: 0.002
+# Solve the TCP height from the fingertip collision proxy, rather than adding world-Z blindly.
+fingertip_table_clearance: 0.005
 open_width: 0.035
 close_width: 0.004
 approach_height: 0.05

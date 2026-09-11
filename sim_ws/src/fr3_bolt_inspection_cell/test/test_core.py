@@ -84,6 +84,10 @@ def test_table_pick_lowers_tcp_without_mutating_estimate():
     assert np.allclose(obj, original)
 
 
+def test_default_fingertip_clearance_is_five_mm():
+    assert config()['fingertip_table_clearance'] == pytest.approx(.005)
+
+
 def test_random_object_positions_are_uniform_disk_bounded_and_reproducible():
     c = config()
     rng = np.random.default_rng(91)
@@ -171,7 +175,7 @@ def test_rest_to_rest_timing_bounds():
 
 @pytest.mark.parametrize('key,value', [('first_arm', 'bad'), ('grasp_offset', .02),
     ('descent_speed', 0), ('center_tolerance', float('nan')), ('open_width', .001),
-    ('minimum_views', 1), ('max_points', 1000000), ('grasp_depth_offset', .005),
+    ('minimum_views', 1), ('max_points', 1000000), ('fingertip_table_clearance', .021),
     ('random_position_radius', 0), ('grasp_test_lift', .05),
     ('max_grasp_attempts', 0), ('max_grasp_attempts', 2.5)])
 def test_invalid_config_rejected(key, value):
