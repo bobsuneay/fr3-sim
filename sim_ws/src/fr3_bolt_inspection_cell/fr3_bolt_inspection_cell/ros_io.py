@@ -191,6 +191,52 @@ class IO:
         p.orientation = tr.rotation
         return matrix(p)
 
+    def tcp_pose(self, side):
+        """Compute the measured TCP from fresh joint feedback, not a goal/TF cache."""
+        req = GetPositionFK.Request()
+        req.header.frame_id = 'world'
+        req.fk_link_names = [side+'_gripper_tcp']
+        req.robot_state = self.state()
+        response = self.call(self.fk, req)
+        if response.error_code.val != 1 or len(response.pose_stamped) != 1:
+            raise RuntimeError('Grasp feedback FK failed')
+        result = matrix(response.pose_stamped[0].pose)
+        if not np.all(np.isfinite(result)):
+            raise RuntimeError('Non-finite grasp TCP feedback')
+        return result
+
+    def ensure_grasp_reached(self, side, target, speed, settle):
+        """Check actual reach before closing; allow one bounded, fully planned correction."""
+        tolerance = self.c['grasp_reach_tolerance']
+        for attempt in range(2):
+            settle()
+            actual = self.tcp_pose(side)
+            if not np.all(np.isfinite(actual)):
+                raise RuntimeError('Non-finite grasp TCP feedback; jaws remain open')
+            delta = actual[:3, 3]-target[:3, 3]
+            position_error = float(np.linalg.norm(delta))
+            angle = Rotation.from_matrix(target[:3, :3].T@actual[:3, :3]).magnitude()
+            self.n.get_logger().info(
+                f'Grasp reach check {attempt+1}/2: side={side}, '
+                f'target={np.round(target[:3, 3], 5).tolist()}, '
+                f'actual={np.round(actual[:3, 3], 5).tolist()}, '
+                f'error={position_error*1000:.2f} mm, height_gap={delta[2]*1000:.2f} mm, '
+                f'angle={angle:.4f} rad')
+            if position_error <= tolerance and angle <= self.c['angular_tolerance']:
+                return
+            if (attempt == 1 or np.linalg.norm(delta[:2]) > tolerance
+                    or not 0 < delta[2] <= self.c['grasp_recovery_max']
+                    or angle > self.c['angular_tolerance']):
+                raise RuntimeError(
+                    f'Grasp target not reached: error={position_error*1000:.2f} mm, '
+                    f'height_gap={delta[2]*1000:.2f} mm, angle={angle:.4f} rad; jaws remain open')
+            self.n.get_logger().warning(
+                'Supplemental grasp descent: one retry from measured state; '
+                'exact target pose, collision checks ON, complete path required')
+            # cartesian() never sends an incomplete path. Planning/execution
+            # failures propagate immediately; do not close or retry an aborted action.
+            self.cartesian(side, [target], speed)
+
     def fk_poses(self, side, trajectory, start):
         result = []
         names = trajectory.joint_trajectory.joint_names
@@ -434,7 +480,23 @@ class IO:
                 for name, value in zip(names, seed)]
             response = self.call(self.ik, req)
             if response.error_code.val != 1:
-                # Diagnostic only: an unconstrained solution is never returned
+                self.n.get_logger().warning(
+                    f'Seed-local IK code={response.error_code.val}; retrying without '
+                    'seed joint constraints, exact TCP and collision checks retained')
+                # Remove only the solver's seed window. seeded_path still rejects
+                # raw joint jumps and checks all interpolated states before motion.
+                req.ik_request.constraints = Constraints()
+                response = self.call(self.ik, req)
+                if response.error_code.val == 1:
+                    values = dict(zip(response.solution.joint_state.name,
+                                      response.solution.joint_state.position))
+                    jump = max(abs(values[name]-value) for name, value in zip(names, seed))
+                    self.n.get_logger().info(
+                        f'Collision-aware IK retry solved: raw max_delta={jump:.5f} rad; '
+                        f'continuity limit={self.c["joint_step_limit"]:.5f} rad, '
+                        'pending full path validation')
+            if response.error_code.val != 1:
+                # Diagnostic only: a collision-disabled solution is never returned
                 # to the planner/executor. It lets us name actual collision pairs.
                 error = response.error_code.val
                 req.ik_request.avoid_collisions = False
@@ -562,6 +624,36 @@ class IO:
             f'measured=({measured[0]:.4f}, {measured[1]:.4f})')
         if max(abs(v-width/2) for v in measured) > .0015:
             raise RuntimeError('Gripper position feedback did not reach target')
+
+    def grasp_owner(self):
+        response = self.call(self.owner, Trigger.Request())
+        if not response.success or response.message not in ('', 'left', 'right'):
+            raise RuntimeError('Simulator grasp ownership unavailable; no retry motion')
+        return response.message
+
+    def wait_stationary(self):
+        """After cancellation, require 0.5 ROS seconds of stable joint feedback."""
+        def now():
+            return self.n.get_clock().now().nanoseconds*1e-9
+        deadline = SimClockDeadline(now(), time.monotonic(), 10.0, 30.0)
+        previous = self.state().joint_state
+        reference = np.array(previous.position)
+        limits = np.array([.0003 if 'finger_joint' in n else .002 for n in previous.name])
+        stable_since = now()
+        while True:
+            self.check()
+            current_time = now()
+            deadline.check(current_time, time.monotonic())
+            current = self.state().joint_state
+            values = dict(zip(current.name, current.position))
+            measured = np.array([values[n] for n in previous.name])
+            if not np.all(np.isfinite(measured)):
+                raise RuntimeError('Invalid joint feedback while waiting for stop')
+            if np.any(np.abs(measured-reference) > limits):
+                reference, stable_since = measured, current_time
+            if current_time-stable_since >= .5:
+                return
+            self.n.stop_event.wait(.05)
 
     def assisted_grasp(self, side, close=True):
         res = self.call(self.grasps[side], SetBool.Request(data=close), 5)

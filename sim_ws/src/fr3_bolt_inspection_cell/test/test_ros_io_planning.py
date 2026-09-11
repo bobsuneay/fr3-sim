@@ -30,7 +30,8 @@ def adapter(monkeypatch):
     io = module.IO.__new__(module.IO)
     io.n = MagicMock()
     io.c = dict(joint_speed=.12, joint_acceleration=.15, cartesian_step=.003,
-                joint_step_limit=.2, center_tolerance=.003)
+                joint_step_limit=.2, center_tolerance=.003, angular_tolerance=.12,
+                grasp_reach_tolerance=.003, grasp_recovery_max=.025)
     io.move, io.cart = object(), object()
     io.state = lambda: NS(joint_state=NS(name=['right_j1'], position=[0.0]))
     io.execute = MagicMock()
@@ -131,7 +132,7 @@ def test_diagnostic_ik_reports_collision_without_returning_a_path(adapter):
     target[2, 3] = -.001
     with pytest.raises(module.PlanningFailure, match='right_wrist2_link <-> table_top'):
         io.seeded_cartesian('right', start, target)
-    assert attempts == [True, False]
+    assert attempts == [True, True, False]
     io.execute.assert_not_called()
 
 
@@ -224,4 +225,132 @@ def test_valid_but_distant_diagnostic_ik_is_reported_and_not_executed(adapter):
     target[2, 3] = -.001
     with pytest.raises(module.PlanningFailure, match='diagnostic state valid.*delta=0.50000'):
         io.seeded_cartesian('right', start, target)
+    io.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('retry_joint,accepted', [(.001, True), (.5, False)])
+def test_collision_aware_retry_retains_raw_jump_guard(adapter, retry_joint, accepted):
+    module, io = adapter
+    module.Constraints = lambda: NS(joint_constraints=[])
+    io.fk, io.ik = object(), object()
+    io.validate_robot_state = MagicMock()
+    names = [f'right_j{i}' for i in range(1, 7)]
+    start = NS(joint_state=NS(name=names, position=[0.0]*6))
+    attempts = []
+    def call(client, request):
+        if client is io.fk:
+            return NS(error_code=NS(val=1), pose_stamped=[NS(pose=NS(
+                position=NS(x=0.0, y=0.0, z=request.robot_state.joint_state.position[0]),
+                orientation=NS(x=0.0, y=0.0, z=0.0, w=1.0)))])
+        assert client is io.ik
+        attempts.append((request.ik_request.avoid_collisions,
+                         len(request.ik_request.constraints.joint_constraints)))
+        return NS(error_code=NS(val=-31 if len(attempts) == 1 else 1),
+                  solution=NS(joint_state=NS(name=names, position=[retry_joint]+[0.0]*5)))
+    io.call = call
+    target = np.eye(4)
+    target[2, 3] = .001
+    if accepted:
+        _, q, frames = io.seeded_cartesian('right', start, target)
+        assert q[-1, 0] == pytest.approx(.001)
+        assert np.allclose(frames[-1], target)
+    else:
+        with pytest.raises(module.PlanningFailure, match='IK branch jump'):
+            io.seeded_cartesian('right', start, target)
+    assert attempts == [(True, 6), (True, 0)]
+    io.execute.assert_not_called()
+
+
+def test_grasp_reach_within_tolerance_does_not_move(adapter):
+    _, io = adapter
+    actual = np.eye(4)
+    actual[2, 3] = .002
+    io.tcp_pose = MagicMock(return_value=actual)
+    io.cartesian = MagicMock()
+    io.ensure_grasp_reached('right', np.eye(4), .008, MagicMock())
+    io.cartesian.assert_not_called()
+
+
+def test_grasp_short_descent_is_corrected_once_and_remeasured(adapter):
+    _, io = adapter
+    actual = np.eye(4)
+    actual[2, 3] = .015
+    target = np.eye(4)
+    io.tcp_pose = MagicMock(side_effect=[actual, target])
+    io.cartesian = MagicMock()
+    settle = MagicMock()
+    io.ensure_grasp_reached('right', target, .008, settle)
+    io.cartesian.assert_called_once_with('right', [target], .008)
+    assert io.tcp_pose.call_count == settle.call_count == 2
+
+
+@pytest.mark.parametrize('xyz,roll', [((0, 0, .03), 0), ((0, 0, -.01), 0),
+    ((.004, 0, .01), 0), ((0, 0, .01), .2), ((float('nan'), 0, 0), 0)])
+def test_grasp_bad_feedback_refuses_correction(adapter, xyz, roll):
+    module, io = adapter
+    actual = np.eye(4)
+    actual[:3, 3] = xyz
+    actual[:3, :3] = module.Rotation.from_euler('x', roll).as_matrix()
+    io.tcp_pose = MagicMock(return_value=actual)
+    io.cartesian = MagicMock()
+    with pytest.raises(RuntimeError, match='jaws remain open'):
+        io.ensure_grasp_reached('right', np.eye(4), .008, MagicMock())
+    io.cartesian.assert_not_called()
+
+
+@pytest.mark.parametrize('aborted', [False, True])
+def test_grasp_correction_failure_never_loops_or_reports_success(adapter, aborted):
+    _, io = adapter
+    actual = np.eye(4)
+    actual[2, 3] = .01
+    io.tcp_pose = MagicMock(return_value=actual)
+    io.cartesian = MagicMock(side_effect=RuntimeError('Controller aborted') if aborted else None)
+    with pytest.raises(RuntimeError, match='Controller aborted' if aborted else 'jaws remain open'):
+        io.ensure_grasp_reached('right', np.eye(4), .008, MagicMock())
+    io.cartesian.assert_called_once()
+    assert io.tcp_pose.call_count == (1 if aborted else 2)
+
+
+def test_tcp_pose_uses_measured_joints_and_checks_fk_result(adapter):
+    _, io = adapter
+    io.fk = object()
+    measured = io.state()
+    io.state = MagicMock(return_value=measured)
+    def call(client, request):
+        assert client is io.fk
+        assert request.robot_state is measured
+        assert request.fk_link_names == ['right_gripper_tcp']
+        return NS(error_code=NS(val=1), pose_stamped=[NS(pose=NS(
+            position=NS(x=.4, y=-.2, z=.726), orientation=NS(x=0, y=0, z=0, w=1)))])
+    io.call = call
+    assert np.allclose(io.tcp_pose('right')[:3, 3], [.4, -.2, .726])
+    io.call = MagicMock(return_value=NS(error_code=NS(val=-1)))
+    with pytest.raises(RuntimeError, match='feedback FK failed'):
+        io.tcp_pose('right')
+
+
+@pytest.mark.parametrize('success,owner', [(False, ''), (True, 'unknown')])
+def test_retry_requires_valid_ownership_service_response(adapter, success, owner):
+    _, io = adapter
+    io.owner = object()
+    io.call = MagicMock(return_value=NS(success=success, message=owner))
+    with pytest.raises(RuntimeError, match='ownership unavailable'):
+        io.grasp_owner()
+
+
+@pytest.mark.parametrize('keeps_moving', [False, True])
+def test_retry_waits_for_stable_feedback_in_simulation_time(adapter, keeps_moving):
+    _, io = adapter
+    seconds = [0.0]
+    io.check = MagicMock()
+    io.n.get_clock.return_value.now.side_effect = lambda: NS(nanoseconds=round(seconds[0]*1e9))
+    io.n.stop_event.wait.side_effect = lambda _: seconds.__setitem__(0, seconds[0]+.1)
+    io.state = lambda: NS(joint_state=NS(name=['right_j1'], position=[
+        (seconds[0] if keeps_moving else min(.3, seconds[0]))*.1]))
+    if keeps_moving:
+        with pytest.raises(TimeoutError):
+            io.wait_stationary()
+    else:
+        io.wait_stationary()
+        assert .8-1e-9 <= seconds[0] < 1.1
     io.execute.assert_not_called()

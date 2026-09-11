@@ -34,9 +34,12 @@ def validate(cfg):
     for key in ('cloud_timeout', 'max_data_age', 'cluster_radius', 'approach_height',
                 'lift_height', 'cartesian_step', 'descent_speed', 'transfer_speed',
                 'scan_speed', 'joint_speed', 'joint_acceleration', 'joint_step_limit',
-                'center_tolerance', 'angular_tolerance', 'settle_seconds'):
+                'center_tolerance', 'angular_tolerance', 'settle_seconds',
+                'grasp_reach_tolerance', 'grasp_recovery_max'):
         if cfg[key] <= 0:
             raise ValueError(key+' must be positive')
+    if cfg['grasp_recovery_max'] < cfg['grasp_reach_tolerance']:
+        raise ValueError('grasp_recovery_max must be >= grasp_reach_tolerance')
     if not (0 < cfg['close_width'] < 2*cfg['shaft_radius'] < cfg['open_width'] <= .10):
         raise ValueError('Invalid jaw widths')
     if not (0 < cfg['head_length'] < cfg['bolt_length'] <= .10):

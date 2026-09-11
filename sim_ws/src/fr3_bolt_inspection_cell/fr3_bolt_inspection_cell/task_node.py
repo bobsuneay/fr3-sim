@@ -1,4 +1,4 @@
-"""Explicitly started, single-run dual-arm inspection workflow."""
+"""Explicitly started inspection workflow with failed-pick recovery."""
 import json
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +21,7 @@ import yaml
 from .core import validate, estimate_bolt, grasp_in_object, centered_views, interpolate_object
 from .ros_io import IO, PlanningFailure, matrix
 from .handover import transfer
+from .retry import prepare_pick_retry
 
 
 def stamp_seconds(stamp):
@@ -44,6 +45,8 @@ class Inspection(Node):
         self.object_state = None
         self.worker = None
         self.phase = 'IDLE'
+        self.pick_secured = False
+        self.pick_target = None
         self.report = {'backend': 'gazebo_assisted', 'events': [], 'views': []}
         self.output = None
         self.tf_buffer = Buffer()
@@ -61,6 +64,7 @@ class Inspection(Node):
                 lambda msg, key=name: self.on_info(key, msg), qos_profile_sensor_data)
         self.io = IO(self)
         self.create_service(Trigger, '/inspection/start', self.start)
+        self.create_service(Trigger, '/inspection/retry_pick', self.retry_pick)
         self.create_service(Trigger, '/inspection/stop', self.stop)
         self.create_service(Trigger, '/inspection/get_status', self.status)
         self.publish('IDLE', 'Ready for explicit start; Gazebo assisted grasp only')
@@ -107,16 +111,31 @@ class Inspection(Node):
             temp.replace(self.output/'report.json')
 
     def start(self, req, res):
+        return self.start_run(res, retry=False)
+
+    def retry_pick(self, req, res):
+        return self.start_run(res, retry=True)
+
+    def start_run(self, res, retry):
         with self.run_lock:
-            if self.phase != 'IDLE':
-                res.message = 'Run already started/latched; inspect status, then restart simulation for a new run'
+            if self.worker is not None and self.worker.is_alive():
+                res.message = 'Task still running/cancelling; wait for it to finish before retrying'
+                return res
+            if ((retry and (self.phase not in ('FAILED', 'STOPPED') or self.pick_secured))
+                    or (not retry and self.phase != 'IDLE')):
+                res.message = 'Retry is available after an initial pick fails/stops, before the object is held'
                 return res
             if self.get_parameter('mode').value != 'gazebo' or not self.get_parameter('enable_execution').value:
                 res.message = 'Require mode:=gazebo enable_execution:=true; mock is model preview only'
                 return res
             self.stop_event.clear()
-            self.publish('STARTING', 'Checking feedback, cameras and point cloud')
-            self.worker = threading.Thread(target=self.run, daemon=True)
+            previous = str(self.output) if self.output else None
+            self.output = None
+            self.report = {'backend': 'gazebo_assisted', 'events': [], 'views': [],
+                           'retry_of': previous if retry else None}
+            self.publish('RETRY_STARTING' if retry else 'STARTING',
+                         'Preparing failed-pick recovery' if retry else 'Checking feedback, cameras and point cloud')
+            self.worker = threading.Thread(target=self.run, kwargs={'retry': retry}, daemon=True)
             self.worker.start()
             res.success, res.message = True, 'Started; monitor /inspection/status'
             return res
@@ -128,7 +147,15 @@ class Inspection(Node):
         return res
 
     def status(self, req, res):
-        res.success, res.message = True, json.dumps(self.report['events'][-1], ensure_ascii=False)
+        with self.run_lock:
+            busy = self.worker is not None and self.worker.is_alive()
+            event = dict(self.report['events'][-1])
+            enabled = (self.get_parameter('mode').value == 'gazebo'
+                       and self.get_parameter('enable_execution').value)
+            event.update(busy=busy, can_start=bool(enabled and not busy and self.phase == 'IDLE'),
+                         can_retry=bool(enabled and not busy and not self.pick_secured
+                                        and self.phase in ('FAILED', 'STOPPED')))
+        res.success, res.message = True, json.dumps(event, ensure_ascii=False)
         return res
 
     def settle(self):
@@ -279,14 +306,18 @@ class Inspection(Node):
         if completed < self.cfg['minimum_views']:
             raise RuntimeError(f'Only {completed} views reachable for {side}; requires {self.cfg["minimum_views"]}')
 
-    def run(self):
+    def run(self, retry=False):
         try:
             self.output = Path(self.cfg['output_directory']).expanduser()/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
             self.output.mkdir(parents=True)
             (self.output/'config.yaml').write_text(yaml.safe_dump(self.cfg), encoding='utf-8')
             self.io.state()
-            if self.io.call(self.io.owner, Trigger.Request()).message:
-                raise RuntimeError('A gripper already owns the object; restart simulation')
+            if self.io.grasp_owner():
+                raise RuntimeError('A gripper already owns the object; retaining grasp, no retry motion')
+            if retry:
+                self.publish('RETRY_CLEARANCE', 'Open empty jaws, retreat and return home before new detection')
+                prepare_pick_retry(self.io, self.cfg['first_arm'], self.arms, self.cfg,
+                                   self.pick_target, self.settle)
             self.capture('camera_check')
             self.publish('DETECT', 'Waiting for three consistent point-cloud estimates')
             estimate = self.perceive()
@@ -305,6 +336,7 @@ class Inspection(Node):
             self.io.gripper(first, self.cfg['open_width'])
             self.io.gripper(second, self.cfg['open_width'])
             target = obj@donor_grasp
+            self.pick_target = target.copy()
             above = target.copy()
             above[2, 3] += self.cfg['approach_height']
             self.get_logger().info(
@@ -316,9 +348,12 @@ class Inspection(Node):
             descent = self.io.global_move(first, above, continuation=target)
             self.publish('DESCEND', 'Straight downward approach at configured slow speed')
             self.io.execute_prepared_cartesian(descent, self.cfg['descent_speed'])
+            self.publish('CHECK_GRASP_REACH', 'Check measured TCP; supplement a short descent if needed')
+            self.io.ensure_grasp_reached(first, target, self.cfg['descent_speed'], self.settle)
             self.publish('GRASP', 'Close jaws; validate shaft enclosure before assisted attachment')
             self.io.gripper(first, self.cfg['close_width'])
             self.io.assisted_grasp(first)
+            self.pick_secured = True
             self.io.object_scene(obj, first)
             lifted = obj.copy()
             lifted[2, 3] += self.cfg['lift_height']

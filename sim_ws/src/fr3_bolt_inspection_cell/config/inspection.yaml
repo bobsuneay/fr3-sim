@@ -17,6 +17,9 @@ grasp_offset: 0.010
 open_width: 0.035
 close_width: 0.004
 approach_height: 0.05
+# Before closing: measured TCP reach, then at most one complete correction.
+grasp_reach_tolerance: 0.003
+grasp_recovery_max: 0.025
 lift_height: 0.05
 cartesian_step: 0.003
 descent_speed: 0.008
