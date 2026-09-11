@@ -129,6 +129,19 @@ def response():
     return NS(success=False, message='')
 
 
+def test_humble_mimic_feedback_preserves_measured_values_and_age(task):
+    _, node = task
+    node.joints = {}
+    msg = NS(name=['left_left_finger_joint', 'left_right_finger_joint_mimic'],
+             position=[.0175, .016])
+    node.on_joints(msg)
+    assert node.joints['left_right_finger_joint'][0] == .016
+    store = JointFeedback()
+    store.receive(msg, 1.)
+    assert store.snapshot(2.)['left_right_finger_joint'] == .016
+    assert store.snapshot(4.) == {}
+
+
 def test_retry_can_run_repeatedly_but_never_concurrently(task):
     _, node = task
     result = node.retry_pick(None, response())

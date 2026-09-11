@@ -16,6 +16,8 @@
 
 ## 相机和夹爪
 
+Humble Gazebo 将从动指状态接口导出为 `*_right_finger_joint_mimic/position`。Gazebo 状态广播器使用此名称；任务节点和面板收到数据后映射回 URDF 关节名，保留实际测量值和接收时间，不用主动指数值伪造从动指反馈。mock 模式仍使用原始关节名。
+
 每只 HKV 夹爪只有一个开合自由度。控制器只接收 `left_finger_joint` 的单关节目标（开口宽度的一半）；`right_finger_joint` 通过 URDF mimic 和 Gazebo ros2_control mimic 参数按 1:1 跟随。两关节轴方向相反，因此两指对称开合。任务仍读取两指反馈，联动位移差超过 1 mm 则报错。修改控制器和模型后需要重建并重启 launch。
 
 | 相机 | 安装位置与用途 | RGB / 深度 / 点云 |

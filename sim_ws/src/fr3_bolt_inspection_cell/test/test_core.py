@@ -171,6 +171,10 @@ def test_linked_fingers_have_only_one_command_interface(mode):
         assert root.find(f"ros2_control/joint[@name='{master}']/command_interface") is not None
         cfg = linked_controllers(mode, None if mode == 'gazebo' else side)
         assert cfg[side+'_gripper_controller']['ros__parameters']['joints'] == [master]
+        feedback = cfg[side+'_joint_state_broadcaster']['ros__parameters']['joints']
+        assert (follower+'_mimic' if mode == 'gazebo' else follower) in feedback
+        if mode == 'gazebo':
+            assert follower not in feedback
 
 
 def test_grasp_config_remains_valid():

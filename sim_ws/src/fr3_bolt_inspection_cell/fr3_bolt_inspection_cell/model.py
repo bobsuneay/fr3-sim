@@ -20,7 +20,7 @@ def linked_controllers(mode, side=None):
             'allow_partial_joints_goal': False}}
         result[arm+'_joint_state_broadcaster']['ros__parameters']['joints'] = (
             [f'{arm}_j{i}' for i in range(1, 7)] +
-            [arm+'_left_finger_joint', arm+'_right_finger_joint'])
+            [arm+'_left_finger_joint', arm+'_right_finger_joint'+('_mimic' if mode == 'gazebo' else '')])
     return result
 
 

@@ -2,6 +2,13 @@
 import math
 
 
+def feedback_joint_name(name):
+    # Humble Gazebo exports measured mimic interfaces with this suffix.
+    if name in ('left_right_finger_joint_mimic', 'right_right_finger_joint_mimic'):
+        return name.removesuffix('_mimic')
+    return name
+
+
 class JointFeedback:
     def __init__(self):
         self.joints = {}
@@ -10,6 +17,7 @@ class JointFeedback:
         if len(msg.name) != len(msg.position):
             return
         for name, value in zip(msg.name, msg.position):
+            name = feedback_joint_name(name)
             if math.isfinite(value):
                 self.joints[name] = (float(value), now)
             else:

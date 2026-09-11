@@ -24,6 +24,7 @@ from .core import fingertip_table_pick_tcp
 from .ros_io import IO, PlanningFailure, matrix
 from .handover import transfer
 from .retry import prepare_pick_retry
+from .feedback import feedback_joint_name
 
 
 def stamp_seconds(stamp):
@@ -82,7 +83,8 @@ class Inspection(Node):
         if len(msg.name) != len(msg.position) or not np.all(np.isfinite(msg.position)):
             return
         with self.data_lock:
-            self.joints.update({n: (q, time.monotonic()) for n, q in zip(msg.name, msg.position)})
+            self.joints.update({feedback_joint_name(n): (q, time.monotonic())
+                                for n, q in zip(msg.name, msg.position)})
 
     def on_cloud(self, msg):
         with self.data_lock:
