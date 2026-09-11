@@ -113,7 +113,10 @@ def augment(root, cfg, sim):
         if name == 'waist_camera':
             bracket_xyz, bracket_size = (.068, 0, 1.22), (.035, .015, .015)
         else:
-            sign = 1 if name.startswith('left') else -1
+            # Both palm frames already mirror in the assembled robot. Derive
+            # the bracket side from the calibrated local camera position so a
+            # name-based second mirror cannot put the right camera underneath.
+            sign = 1 if c['xyz'][1] >= 0 else -1
             bracket_xyz, bracket_size = (0, sign*.055, .020), (.015, .050, .015)
         mount = element(root, 'link', name=name+'_bracket')
         inertial(mount, .025, bracket_size)

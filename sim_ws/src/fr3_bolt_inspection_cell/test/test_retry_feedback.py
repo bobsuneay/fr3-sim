@@ -106,11 +106,12 @@ def task(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     node = module.Inspection.__new__(module.Inspection)
-    node.run_lock, node.stop_event = threading.Lock(), threading.Event()
+    node.run_lock, node.data_lock, node.stop_event = threading.Lock(), threading.Lock(), threading.Event()
     node.phase, node.pick_secured, node.pick_target = 'FAILED', False, np.eye(4)
     node.worker, node.output = None, Path('previous_run')
     node.report = {'events': [{'phase': 'FAILED', 'detail': 'old'}], 'views': ['old']}
     node.io, node.status_pub = MagicMock(), MagicMock()
+    node.cloud, node.object_state = object(), object()
     node.get_logger = MagicMock()
     node.get_parameter = lambda name: NS(value='gazebo' if name == 'mode' else True)
     class Thread:
@@ -157,6 +158,36 @@ def test_status_enables_retry_only_after_worker_exits(task):
     assert json.loads(node.status(None, response()).message)['can_retry']
     node.pick_secured = True
     assert not json.loads(node.status(None, response()).message)['can_retry']
+    assert not json.loads(node.status(None, response()).message)['can_randomize']
+
+
+def test_randomize_object_moves_within_disk_and_clears_old_detection(task):
+    _, node = task
+    node.phase, node.output = 'FAILED', None
+    node.stop_event.set()
+    node.cfg = dict(random_position_center=[.5, -.2], random_position_radius=.05,
+                    table_z=.72, head_radius=.006)
+    node.io.grasp_owner.return_value = ''
+    result = node.randomize_object(None, response())
+    assert result.success
+    world_object = node.io.relocate_object.call_args.args[0]
+    assert np.linalg.norm(world_object[:2, 3]-[.5, -.2]) <= .05
+    assert world_object[2, 3] == pytest.approx(.7265)
+    assert node.cloud is node.object_state is node.pick_target is None
+    assert not node.stop_event.is_set()
+
+
+@pytest.mark.parametrize('busy,secured,owner', [(True, False, ''),
+                                                (False, True, ''),
+                                                (False, False, 'right')])
+def test_randomize_rejects_busy_secured_or_owned_object(task, busy, secured, owner):
+    _, node = task
+    node.worker = NS(is_alive=lambda: busy)
+    node.pick_secured = secured
+    node.io.grasp_owner.return_value = owner
+    result = node.randomize_object(None, response())
+    assert not result.success
+    node.io.relocate_object.assert_not_called()
 
 
 def test_retry_runs_new_camera_and_detection_after_recovery(task, monkeypatch, tmp_path):
@@ -167,11 +198,115 @@ def test_retry_runs_new_camera_and_detection_after_recovery(task, monkeypatch, t
     calls = []
     monkeypatch.setattr(module, 'prepare_pick_retry', lambda *args: calls.append('recovery'))
     node.capture = lambda label: calls.append(label)
-    def perceive():
+    def acquire(*_):
         calls.append('new_detection')
         raise RuntimeError('No new cloud')
-    node.perceive = perceive
+    node.acquire_initial_pick = acquire
     node.run(retry=True)
     assert calls == ['recovery', 'camera_check', 'new_detection']
     assert node.phase == 'FAILED'
     assert (node.output/'report.json').is_file()
+
+
+def test_automatic_pick_retries_until_test_lift_is_confirmed(task):
+    _, node = task
+    node.output = None
+    node.cfg = {'max_grasp_attempts': 5}
+    confirmed = (np.eye(4), np.eye(4), np.eye(4), np.eye(4))
+    node.pick_once = MagicMock(side_effect=[RuntimeError('miss one'),
+                                            RuntimeError('miss two'), confirmed])
+    node.reset_failed_pick = MagicMock()
+    assert node.acquire_initial_pick('right', 'left') is confirmed
+    assert node.pick_once.call_count == 3
+    assert node.reset_failed_pick.call_count == 2
+    assert node.report['pick_attempts'] == [
+        {'attempt': 1, 'status': 'failed', 'reason': 'miss one'},
+        {'attempt': 2, 'status': 'failed', 'reason': 'miss two'},
+        {'attempt': 3, 'status': 'confirmed'}]
+
+
+def test_automatic_pick_limit_cleans_last_failure_then_stops(task):
+    _, node = task
+    node.output = None
+    node.cfg = {'max_grasp_attempts': 2}
+    node.pick_once = MagicMock(side_effect=RuntimeError('no object follow'))
+    node.reset_failed_pick = MagicMock()
+    with pytest.raises(RuntimeError, match='not confirmed after 2'):
+        node.acquire_initial_pick('right', 'left')
+    assert node.pick_once.call_count == node.reset_failed_pick.call_count == 2
+
+
+def test_stop_during_pick_preserves_grasp_and_does_not_auto_release(task):
+    _, node = task
+    node.output = None
+    node.cfg = {'max_grasp_attempts': 5}
+    node.stop_event.set()
+    node.pick_once = MagicMock(side_effect=RuntimeError('Stopped'))
+    node.reset_failed_pick = MagicMock()
+    with pytest.raises(RuntimeError, match='Stopped'):
+        node.acquire_initial_pick('right', 'left')
+    node.reset_failed_pick.assert_not_called()
+
+
+def test_pick_is_confirmed_only_after_object_follows_test_lift(task):
+    _, node = task
+    node.output = None
+    node.phase = 'IDLE'
+    node.report = {'events': [], 'views': []}
+    node.cfg = dict(max_grasp_attempts=5, grasp_offset=.01, grasp_depth_offset=.002,
+                    open_width=.035, close_width=.004, approach_height=.05,
+                    descent_speed=.008, grasp_test_lift=.015)
+    obj = np.eye(4)
+    obj[:3, 3] = [.5, -.2, .724]
+    node.perceive = MagicMock(return_value=NS(pose=obj))
+    node.io.truth.return_value = obj.copy()
+    node.io.grasp_owner.return_value = 'right'
+    node.io.global_move.return_value = object()
+    node.settle = MagicMock()
+    node.verify = MagicMock(return_value=.001)
+    result = node.pick_once('right', 'left', 1)
+    assert node.pick_secured
+    test_pose = result[3]
+    assert test_pose[2, 3] == pytest.approx(.739)
+    node.verify.assert_called_once_with(test_pose)
+    node.io.assisted_grasp.assert_called_once_with('right')
+    assert node.io.object_scene.call_args_list[-1].args == (obj, 'right')
+    lift_target = node.io.cartesian.call_args.args[1][0]
+    assert np.allclose(lift_target, test_pose@result[1])
+
+
+def test_failed_test_lift_keeps_safety_latch_until_cleanup(task):
+    _, node = task
+    node.output = None
+    node.phase = 'IDLE'
+    node.report = {'events': [], 'views': []}
+    node.cfg = dict(max_grasp_attempts=5, grasp_offset=.01, grasp_depth_offset=.002,
+                    open_width=.035, close_width=.004, approach_height=.05,
+                    descent_speed=.008, grasp_test_lift=.015)
+    obj = np.eye(4)
+    obj[:3, 3] = [.5, -.2, .724]
+    node.perceive = MagicMock(return_value=NS(pose=obj))
+    node.io.truth.return_value = obj.copy()
+    node.io.global_move.return_value = object()
+    node.settle = MagicMock()
+    node.verify = MagicMock(side_effect=RuntimeError('object stayed on table'))
+    with pytest.raises(RuntimeError, match='stayed on table'):
+        node.pick_once('right', 'left', 1)
+    assert node.pick_secured
+
+
+def test_failed_pick_cleanup_releases_attachment_before_opening(task):
+    _, node = task
+    node.output = None
+    node.cfg = dict(open_width=.035, approach_height=.05, descent_speed=.008)
+    node.arms = {s: {'initial': [0]*6} for s in ('left', 'right')}
+    node.io.grasp_owner.side_effect = ['right', '', '']
+    actual = np.eye(4)
+    node.io.truth.return_value = actual
+    node.pick_secured = True
+    node.pick_target = None
+    node.settle = MagicMock()
+    node.reset_failed_pick('right')
+    node.io.assisted_grasp.assert_called_once_with('right', False)
+    node.io.object_scene.assert_called_once_with(actual, previous='right')
+    assert not node.pick_secured

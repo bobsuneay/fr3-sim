@@ -19,7 +19,7 @@ def adapter(monkeypatch):
                  'action_msgs.msg', 'builtin_interfaces.msg', 'control_msgs.action',
                  'geometry_msgs.msg', 'moveit_msgs.action', 'moveit_msgs.msg',
                  'moveit_msgs.srv', 'shape_msgs.msg', 'std_srvs.srv',
-                 'gazebo_msgs.srv', 'trajectory_msgs.msg'):
+                 'gazebo_msgs.msg', 'gazebo_msgs.srv', 'trajectory_msgs.msg'):
         monkeypatch.setitem(sys.modules, name, MagicMock())
     spec = importlib.util.spec_from_file_location(
         'fr3_bolt_inspection_cell._test_ros_io', SHARE/'fr3_bolt_inspection_cell/ros_io.py')
@@ -354,3 +354,35 @@ def test_retry_waits_for_stable_feedback_in_simulation_time(adapter, keeps_movin
         io.wait_stationary()
         assert .8-1e-9 <= seconds[0] < 1.1
     io.execute.assert_not_called()
+
+
+def test_relocate_object_stops_motion_and_replaces_planning_scene(adapter):
+    module, io = adapter
+    io.set_entity = object()
+    io.c['simulation_entity'] = 'bolt_00_00'
+    module.EntityState = NS
+    module.SetEntityState.Request = NS
+    target = np.eye(4)
+    target[:3, 3] = [.52, -.18, .7265]
+    io.call = MagicMock(return_value=NS(success=True))
+    io.object_scene = MagicMock()
+    io.relocate_object(target)
+    request = io.call.call_args.args[1]
+    assert request.state.name == 'bolt_00_00'
+    assert request.state.reference_frame == 'world'
+    assert [request.state.pose.position.x, request.state.pose.position.y,
+            request.state.pose.position.z] == pytest.approx([.52, -.18, .7265])
+    io.object_scene.assert_called_once_with(target)
+
+
+def test_relocate_object_failure_does_not_change_planning_scene(adapter):
+    module, io = adapter
+    io.set_entity = object()
+    io.c['simulation_entity'] = 'bolt_00_00'
+    module.EntityState = NS
+    module.SetEntityState.Request = NS
+    io.call = MagicMock(return_value=NS(success=False))
+    io.object_scene = MagicMock()
+    with pytest.raises(RuntimeError, match='refused object relocation'):
+        io.relocate_object(np.eye(4))
+    io.object_scene.assert_not_called()

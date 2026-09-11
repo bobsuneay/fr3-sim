@@ -57,6 +57,7 @@ def main():
             lambda msg, n=name: receive(n, msg), qos_profile_sensor_data)
     clients = {name: node.create_client(Trigger, topic) for name, topic in (
         ('start', '/inspection/start'), ('retry', '/inspection/retry_pick'),
+        ('randomize', '/inspection/randomize_object'),
         ('stop', '/inspection/stop'), ('status', '/inspection/get_status'),
         ('owner', '/inspection/sim/owner'))}
     requests = {}
@@ -133,7 +134,7 @@ def main():
             poll('owner')
             last_poll = now
         for name, (future, sent) in list(requests.items()):
-            if name in ('start', 'retry', 'stop') and not future.done() and now-sent > 8:
+            if name in ('start', 'retry', 'randomize', 'stop') and not future.done() and now-sent > 8:
                 # Abandon only the local response; a remote task may already be
                 # running. Read status and leave Stop available; never auto-resend.
                 future.cancel()
@@ -150,9 +151,10 @@ def main():
         fresh = now-latest['status_time'] <= 3
         controls = dict(latest['controls']) if fresh else {}
         if latest['owner'] in ('left', 'right') and now-latest['owner_time'] <= 2:
-            controls['can_retry'] = False
+            controls['can_retry'] = controls['can_randomize'] = False
         ui.controls(controls, pending=any(
-            not future.done() for name, (future, _) in requests.items() if name in ('start', 'retry')))
+            not future.done() for name, (future, _) in requests.items()
+            if name in ('start', 'retry', 'randomize')))
         event = latest['event']
         if event:
             ui.status.set(event['phase']+'\n'+event['detail']+('' if fresh else '\n任务状态连接中断/等待服务'))

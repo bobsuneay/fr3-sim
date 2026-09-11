@@ -13,7 +13,8 @@ SHARE = Path(__file__).resolve().parents[1]
 BASE = SHARE.parent/'fr3_dual_bolt_cell'
 sys.path[:0] = [str(SHARE), str(BASE)]
 from fr3_bolt_inspection_cell.core import (SimClockDeadline, centered_views, estimate_bolt,
-    grasp_in_object, interpolate_object, segment_times, transform, validate)
+    grasp_in_object, interpolate_object, random_disk_xy, segment_times, table_pick_tcp,
+    transform, validate)
 from fr3_bolt_inspection_cell.model import augment, inspection_world
 from fr3_dual_bolt_cell.model import build_model, semantic
 from fr3_dual_bolt_cell.world import load_scene, world_xml
@@ -70,6 +71,32 @@ def test_object_center_remains_fixed_through_interpolated_views():
             assert np.allclose(tcp@np.linalg.inv(grasp), obj)
             for sample in interpolate_object(neutral, obj, grasp):
                 assert np.allclose((sample@np.linalg.inv(grasp))[:3, 3], c['inspection_center'])
+
+
+def test_table_pick_lowers_tcp_without_mutating_estimate():
+    obj = transform([.5, -.2, .725], [0, 0, .6])
+    original = obj.copy()
+    nominal = obj@grasp_in_object(-.01)
+    target = table_pick_tcp(obj, -.01, .002)
+    assert np.allclose(target[:2, 3], nominal[:2, 3])
+    assert target[2, 3] == pytest.approx(nominal[2, 3]-.002)
+    assert np.allclose(target[:3, :3], nominal[:3, :3])
+    assert np.allclose(obj, original)
+
+
+def test_random_object_positions_are_uniform_disk_bounded_and_reproducible():
+    c = config()
+    rng = np.random.default_rng(91)
+    a = np.array([random_disk_xy(c['random_position_center'],
+        c['random_position_radius'], rng) for _ in range(2000)])
+    b = np.array([random_disk_xy(c['random_position_center'],
+        c['random_position_radius'], np.random.default_rng(91)) for _ in range(1)])
+    first = random_disk_xy(c['random_position_center'], c['random_position_radius'],
+                           np.random.default_rng(91))
+    radii = np.linalg.norm(a-np.asarray(c['random_position_center']), axis=1)
+    assert np.max(radii) <= .05+1e-12
+    assert .032 < np.mean(radii) < .035  # uniform area has mean radius 2R/3
+    assert np.allclose(b[0], first)
 
 
 def test_sim_clock_deadline_accepts_slow_simulation_and_detects_stalls():
@@ -144,7 +171,9 @@ def test_rest_to_rest_timing_bounds():
 
 @pytest.mark.parametrize('key,value', [('first_arm', 'bad'), ('grasp_offset', .02),
     ('descent_speed', 0), ('center_tolerance', float('nan')), ('open_width', .001),
-    ('minimum_views', 1), ('max_points', 1000000)])
+    ('minimum_views', 1), ('max_points', 1000000), ('grasp_depth_offset', .005),
+    ('random_position_radius', 0), ('grasp_test_lift', .05),
+    ('max_grasp_attempts', 0), ('max_grasp_attempts', 2.5)])
 def test_invalid_config_rejected(key, value):
     c = config()
     c[key] = value
@@ -190,6 +219,20 @@ def test_camera_aims_at_part_and_has_realistic_standoff():
         assert local[0] > .15
         assert abs(np.arctan2(local[1], local[0])) < .1
         assert abs(np.arctan2(local[2], local[0])) < .1
+
+
+def test_wrist_cameras_are_body_centreline_mirrors_at_initial_pose():
+    root, arms = robot()
+    sys.path.insert(0, str(BASE/'test'))
+    import test_geometry as g
+    frames = g.poses(root, arms)
+    left, right = frames['left_d435i_link'], frames['right_d435i_link']
+    reflection = np.diag([1, -1, 1])
+    assert np.allclose(right[:3, 3], reflection@left[:3, 3], atol=1e-8)
+    # Reflect world Y and camera-local Y to keep a right-handed rotation.
+    assert np.allclose(right[:3, :3], reflection@left[:3, :3]@reflection, atol=1e-8)
+    assert left[2, 3] > frames['left_gripper_palm'][2, 3]+.05
+    assert right[2, 3] > frames['right_gripper_palm'][2, 3]+.05
 
 
 def test_initial_collision_geometry():

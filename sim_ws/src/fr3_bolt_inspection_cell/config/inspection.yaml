@@ -3,8 +3,8 @@ first_arm: right
 cloud_topic: /head_camera/points
 cloud_timeout: 15.0
 max_data_age: 2.0
-roi_min: [0.47, -0.23, 0.721]
-roi_max: [0.53, -0.17, 0.738]
+roi_min: [0.43, -0.27, 0.721]
+roi_max: [0.57, -0.13, 0.738]
 table_z: 0.72
 cluster_radius: 0.003
 min_points: 20
@@ -14,6 +14,8 @@ shaft_radius: 0.004
 head_radius: 0.006
 head_length: 0.006
 grasp_offset: 0.010
+# Lower the first pick TCP below the estimated centre so the fingertips surround the shaft.
+grasp_depth_offset: 0.002
 open_width: 0.035
 close_width: 0.004
 approach_height: 0.05
@@ -21,6 +23,9 @@ approach_height: 0.05
 grasp_reach_tolerance: 0.003
 grasp_recovery_max: 0.025
 lift_height: 0.05
+# Confirm a real follow motion before continuing; retry the complete pick if it fails.
+grasp_test_lift: 0.015
+max_grasp_attempts: 5
 cartesian_step: 0.003
 descent_speed: 0.008
 transfer_speed: 0.025
@@ -39,6 +44,8 @@ center_tolerance: 0.003
 angular_tolerance: 0.12
 output_directory: ~/fr3_inspection_runs
 simulation_entity: bolt_00_00
+random_position_center: [0.50, -0.20]
+random_position_radius: 0.05
 cameras:
   waist_camera:
     parent: support_link
@@ -62,8 +69,9 @@ cameras:
     rate: 10.0
   right_d435i:
     parent: right_gripper_palm
-    xyz: [0.0, -0.080, 0.020]
-    rpy: [0.0, -1.016, 1.5707963267948966]
+    # Palm frames are already body-centreline mirrors; use the same local mount.
+    xyz: [0.0, 0.080, 0.020]
+    rpy: [0.0, -1.016, -1.5707963267948966]
     width: 640
     height: 480
     horizontal_fov: 1.518

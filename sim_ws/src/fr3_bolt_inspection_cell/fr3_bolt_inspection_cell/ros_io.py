@@ -21,7 +21,8 @@ from rclpy.time import Time
 from scipy.spatial.transform import Rotation
 from shape_msgs.msg import SolidPrimitive
 from std_srvs.srv import SetBool, Trigger
-from gazebo_msgs.srv import GetEntityState
+from gazebo_msgs.msg import EntityState
+from gazebo_msgs.srv import GetEntityState, SetEntityState
 from trajectory_msgs.msg import JointTrajectoryPoint
 from .core import SimClockDeadline, segment_times
 from .cartesian import CartesianPlanningError, PreparedCartesian, seeded_path
@@ -66,6 +67,7 @@ class IO:
         self.apply = node.create_client(ApplyPlanningScene, '/apply_planning_scene')
         self.scene = node.create_client(GetPlanningScene, '/get_planning_scene')
         self.entity = node.create_client(GetEntityState, '/inspection/sim/get_entity_state')
+        self.set_entity = node.create_client(SetEntityState, '/inspection/sim/set_entity_state')
         self.owner = node.create_client(Trigger, '/inspection/sim/owner')
         self.grasps = {s: node.create_client(SetBool, '/inspection/sim/'+s+'_grasp')
                        for s in ('left', 'right')}
@@ -670,6 +672,18 @@ class IO:
         if not res.success:
             raise RuntimeError('Simulation verification state unavailable')
         return matrix(res.state.pose)
+
+    def relocate_object(self, world_object):
+        request = SetEntityState.Request()
+        request.state = EntityState()
+        request.state.name = self.c['simulation_entity']
+        request.state.reference_frame = 'world'
+        request.state.pose = pose(world_object)
+        # A default Twist explicitly removes velocity left by a failed pick.
+        response = self.call(self.set_entity, request)
+        if not response.success:
+            raise RuntimeError('Gazebo refused object relocation')
+        self.object_scene(world_object)
 
     def scene_diff(self, diff):
         diff.is_diff = True

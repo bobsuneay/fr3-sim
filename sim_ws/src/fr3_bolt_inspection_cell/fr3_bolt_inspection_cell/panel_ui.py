@@ -17,6 +17,9 @@ class InspectionPanel:
         self.start.pack(side='left', padx=4)
         self.retry = ttk.Button(bar, text='重新夹取', command=lambda: request('retry'), state='disabled')
         self.retry.pack(side='left', padx=4)
+        self.randomize = ttk.Button(bar, text='随机零件位置',
+                                    command=lambda: request('randomize'), state='disabled')
+        self.randomize.pack(side='left', padx=4)
         ttk.Button(bar, text='停止运动并保持夹持', command=lambda: request('stop')).pack(side='left', padx=4)
         self.selected = tk.StringVar(value=cameras[0])
         ttk.Combobox(bar, textvariable=self.selected, values=cameras,
@@ -56,3 +59,5 @@ class InspectionPanel:
     def controls(self, state, pending=False):
         self.start.configure(state='normal' if state.get('can_start') and not pending else 'disabled')
         self.retry.configure(state='normal' if state.get('can_retry') and not pending else 'disabled')
+        self.randomize.configure(
+            state='normal' if state.get('can_randomize') and not pending else 'disabled')

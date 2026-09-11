@@ -13,6 +13,15 @@ def transform(xyz=(0, 0, 0), rpy=(0, 0, 0)):
     return out
 
 
+def random_disk_xy(center, radius, rng):
+    """Uniform-area sample in a disk, supplied RNG keeps tests deterministic."""
+    if len(center) != 2 or radius <= 0:
+        raise ValueError('Random object disk needs a 2D centre and positive radius')
+    distance = radius*math.sqrt(float(rng.random()))
+    angle = 2*math.pi*float(rng.random())
+    return np.asarray(center, dtype=float)+distance*np.array([math.cos(angle), math.sin(angle)])
+
+
 def validate(cfg):
     def finite(value):
         if isinstance(value, dict):
@@ -29,17 +38,31 @@ def validate(cfg):
     for key in ('roi_min', 'roi_max', 'inspection_center', 'handover_center'):
         if len(cfg[key]) != 3:
             raise ValueError(key+' must have three entries')
+    if len(cfg['random_position_center']) != 2:
+        raise ValueError('random_position_center must have two entries')
     if not np.all(np.array(cfg['roi_max']) > cfg['roi_min']):
         raise ValueError('Invalid ROI')
     for key in ('cloud_timeout', 'max_data_age', 'cluster_radius', 'approach_height',
                 'lift_height', 'cartesian_step', 'descent_speed', 'transfer_speed',
                 'scan_speed', 'joint_speed', 'joint_acceleration', 'joint_step_limit',
                 'center_tolerance', 'angular_tolerance', 'settle_seconds',
-                'grasp_reach_tolerance', 'grasp_recovery_max'):
+                'grasp_reach_tolerance', 'grasp_recovery_max',
+                'random_position_radius', 'grasp_test_lift'):
         if cfg[key] <= 0:
             raise ValueError(key+' must be positive')
     if cfg['grasp_recovery_max'] < cfg['grasp_reach_tolerance']:
         raise ValueError('grasp_recovery_max must be >= grasp_reach_tolerance')
+    if type(cfg['max_grasp_attempts']) is not int or not 1 <= cfg['max_grasp_attempts'] <= 20:
+        raise ValueError('max_grasp_attempts must be an integer from 1 to 20')
+    if cfg['grasp_test_lift'] >= cfg['lift_height']:
+        raise ValueError('grasp_test_lift must be less than lift_height')
+    if not 0 <= cfg['grasp_depth_offset'] <= cfg['shaft_radius']:
+        raise ValueError('grasp_depth_offset must be between zero and shaft_radius')
+    extent = cfg['random_position_radius']+cfg['bolt_length']/2
+    centre = np.asarray(cfg['random_position_center'])
+    if np.any(centre-extent < np.asarray(cfg['roi_min'][:2])) or np.any(
+            centre+extent > np.asarray(cfg['roi_max'][:2])):
+        raise ValueError('Point-cloud ROI must contain the random position disk and whole bolt')
     if not (0 < cfg['close_width'] < 2*cfg['shaft_radius'] < cfg['open_width'] <= .10):
         raise ValueError('Invalid jaw widths')
     if not (0 < cfg['head_length'] < cfg['bolt_length'] <= .10):
@@ -145,6 +168,14 @@ def grasp_in_object(offset, below=False):
     result = np.eye(4)
     result[:3, :3] = [[0, 1, 0], [-1 if below else 1, 0, 0], [0, 0, 1 if below else -1]]
     result[:3, 3] = [offset, 0, 0]
+    return result
+
+
+def table_pick_tcp(object_pose, axial_offset, depth_offset):
+    """Place the TCP slightly below an uncertain perceived shaft centre."""
+    result = np.asarray(object_pose, dtype=float)@grasp_in_object(axial_offset)
+    result = result.copy()
+    result[2, 3] -= depth_offset
     return result
 
 

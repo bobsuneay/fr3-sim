@@ -18,7 +18,9 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 import yaml
-from .core import validate, estimate_bolt, grasp_in_object, centered_views, interpolate_object
+from .core import (validate, estimate_bolt, grasp_in_object, centered_views,
+                   interpolate_object, random_disk_xy, transform)
+from .core import table_pick_tcp
 from .ros_io import IO, PlanningFailure, matrix
 from .handover import transfer
 from .retry import prepare_pick_retry
@@ -65,6 +67,7 @@ class Inspection(Node):
         self.io = IO(self)
         self.create_service(Trigger, '/inspection/start', self.start)
         self.create_service(Trigger, '/inspection/retry_pick', self.retry_pick)
+        self.create_service(Trigger, '/inspection/randomize_object', self.randomize_object)
         self.create_service(Trigger, '/inspection/stop', self.stop)
         self.create_service(Trigger, '/inspection/get_status', self.status)
         self.publish('IDLE', 'Ready for explicit start; Gazebo assisted grasp only')
@@ -146,6 +149,37 @@ class Inspection(Node):
         res.success, res.message = True, 'Cancellation requested; no automatic gripper opening'
         return res
 
+    def randomize_object(self, req, res):
+        with self.run_lock:
+            busy = self.worker is not None and self.worker.is_alive()
+            if busy or self.pick_secured:
+                res.message = 'Random position requires an idle task with no confirmed grasp'
+                return res
+            if self.get_parameter('mode').value != 'gazebo':
+                res.message = 'Random position is available in Gazebo mode only'
+                return res
+            try:
+                self.stop_event.clear()
+                if self.io.grasp_owner():
+                    raise RuntimeError('A gripper holds the object; position unchanged')
+                self.io.wait_stationary()
+                xy = random_disk_xy(self.cfg['random_position_center'],
+                                    self.cfg['random_position_radius'], np.random.default_rng())
+                world_object = transform([xy[0], xy[1],
+                    self.cfg['table_z']+self.cfg['head_radius']+.0005], [0, np.pi/2, 0])
+                self.io.relocate_object(world_object)
+                with self.data_lock:
+                    self.cloud = None
+                    self.object_state = None
+                self.pick_target = None
+                self.publish(self.phase,
+                    f'Object randomized to x={xy[0]:.4f}, y={xy[1]:.4f}; next pick will redetect')
+                res.success = True
+                res.message = f'Object moved to ({xy[0]:.4f}, {xy[1]:.4f}) m'
+            except Exception as exc:
+                res.message = str(exc)
+            return res
+
     def status(self, req, res):
         with self.run_lock:
             busy = self.worker is not None and self.worker.is_alive()
@@ -154,7 +188,9 @@ class Inspection(Node):
                        and self.get_parameter('enable_execution').value)
             event.update(busy=busy, can_start=bool(enabled and not busy and self.phase == 'IDLE'),
                          can_retry=bool(enabled and not busy and not self.pick_secured
-                                        and self.phase in ('FAILED', 'STOPPED')))
+                                        and self.phase in ('FAILED', 'STOPPED')),
+                         can_randomize=bool(self.get_parameter('mode').value == 'gazebo'
+                                            and not busy and not self.pick_secured))
         res.success, res.message = True, json.dumps(event, ensure_ascii=False)
         return res
 
@@ -306,6 +342,95 @@ class Inspection(Node):
         if completed < self.cfg['minimum_views']:
             raise RuntimeError(f'Only {completed} views reachable for {side}; requires {self.cfg["minimum_views"]}')
 
+    def reset_failed_pick(self, first):
+        """Remove any partial simulated/planning attachment before retrying."""
+        owner = self.io.grasp_owner()
+        if owner not in ('', first):
+            raise RuntimeError(f'Cannot recover pick: {owner} unexpectedly owns the object')
+        if owner == first:
+            self.io.assisted_grasp(first, False)
+        actual = self.io.truth()
+        # Safe even when attachment was never applied: remove the named
+        # attached object and replace its current world collision geometry.
+        self.io.object_scene(actual, previous=first)
+        self.pick_secured = False
+        prepare_pick_retry(self.io, first, self.arms, self.cfg, self.pick_target, self.settle)
+
+    def pick_once(self, first, second, attempt):
+        """Detect, approach, close and prove the object follows a short test lift."""
+        self.publish('DETECT',
+            f'Pick attempt {attempt}/{self.cfg["max_grasp_attempts"]}: waiting for three point-cloud estimates')
+        estimate = self.perceive()
+        obj = estimate.pose
+        target = table_pick_tcp(obj, -self.cfg['grasp_offset'], self.cfg['grasp_depth_offset'])
+        donor_grasp = np.linalg.inv(obj)@target
+        receiver_grasp = grasp_in_object(self.cfg['grasp_offset'], below=True)
+        self.report['estimated_pose'] = obj.tolist()
+        self.object_truth = np.linalg.inv(obj)@self.io.truth()
+        if np.linalg.norm(self.object_truth[:3, 3]) > .004:
+            raise RuntimeError('Estimated centre differs by >4 mm from simulation verification')
+        self.io.object_scene(obj)
+        self.io.allow_touch(['table_top', first+'_left_finger', first+'_right_finger'])
+        self.publish('APPROACH',
+            f'Pick attempt {attempt}: {first} approaching above the detected shaft')
+        self.io.gripper(first, self.cfg['open_width'])
+        self.io.gripper(second, self.cfg['open_width'])
+        self.pick_target = target.copy()
+        above = target.copy()
+        above[2, 3] += self.cfg['approach_height']
+        self.get_logger().info(
+            f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
+            f'{above[2, 3]:.4f}), grasp=({target[0, 3]:.4f}, {target[1, 3]:.4f}, '
+            f'{target[2, 3]:.4f}), descent={self.cfg["approach_height"]:.3f} m, '
+            f'depth_offset={self.cfg["grasp_depth_offset"]*1000:.1f} mm')
+        descent = self.io.global_move(first, above, continuation=target)
+        self.publish('DESCEND', f'Pick attempt {attempt}: straight downward approach')
+        self.io.execute_prepared_cartesian(descent, self.cfg['descent_speed'])
+        self.publish('CHECK_GRASP_REACH', 'Check measured TCP; supplement a short descent if needed')
+        self.io.ensure_grasp_reached(first, target, self.cfg['descent_speed'], self.settle)
+        self.publish('GRASP', f'Pick attempt {attempt}: close jaws and request assisted contact validation')
+        self.io.gripper(first, self.cfg['close_width'])
+        self.io.assisted_grasp(first)
+        # Safety latch: ownership exists even though the test lift has not yet
+        # proved a usable grasp. Automatic cleanup clears it after release.
+        self.pick_secured = True
+        self.io.object_scene(obj, first)
+        test_pose = obj.copy()
+        test_pose[2, 3] += self.cfg['grasp_test_lift']
+        self.publish('VERIFY_GRASP',
+            f'Test lift {self.cfg["grasp_test_lift"]*1000:.0f} mm and verify object follows')
+        self.io.cartesian(first, [test_pose@donor_grasp], self.cfg['descent_speed'])
+        self.settle()
+        drift = self.verify(test_pose)
+        if self.io.grasp_owner() != first:
+            raise RuntimeError('Grasp ownership was lost during test lift')
+        self.publish('GRASP_CONFIRMED',
+            f'Object followed test lift; tracking error={drift*1000:.2f} mm')
+        return obj, donor_grasp, receiver_grasp, test_pose
+
+    def acquire_initial_pick(self, first, second):
+        failures = self.report.setdefault('pick_attempts', [])
+        maximum = self.cfg['max_grasp_attempts']
+        for attempt in range(1, maximum+1):
+            try:
+                result = self.pick_once(first, second, attempt)
+                failures.append({'attempt': attempt, 'status': 'confirmed'})
+                self.save_report()
+                return result
+            except Exception as exc:
+                if self.stop_event.is_set():
+                    raise
+                failures.append({'attempt': attempt, 'status': 'failed', 'reason': str(exc)})
+                self.publish('GRASP_RETRY',
+                    f'Pick attempt {attempt}/{maximum} failed: {exc}; cleaning up for retry')
+                try:
+                    self.reset_failed_pick(first)
+                except Exception as cleanup:
+                    raise RuntimeError(f'Pick failed ({exc}); retry cleanup failed: {cleanup}') from cleanup
+                if attempt == maximum:
+                    raise RuntimeError(f'Grasp not confirmed after {maximum} attempts: {exc}') from exc
+        raise AssertionError('unreachable')
+
     def run(self, retry=False):
         try:
             self.output = Path(self.cfg['output_directory']).expanduser()/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
@@ -319,42 +444,9 @@ class Inspection(Node):
                 prepare_pick_retry(self.io, self.cfg['first_arm'], self.arms, self.cfg,
                                    self.pick_target, self.settle)
             self.capture('camera_check')
-            self.publish('DETECT', 'Waiting for three consistent point-cloud estimates')
-            estimate = self.perceive()
-            obj = estimate.pose
             first = self.cfg['first_arm']
             second = 'left' if first == 'right' else 'right'
-            donor_grasp = grasp_in_object(-self.cfg['grasp_offset'])
-            receiver_grasp = grasp_in_object(self.cfg['grasp_offset'], below=True)
-            self.report['estimated_pose'] = obj.tolist()
-            self.object_truth = np.linalg.inv(obj)@self.io.truth()  # verification reference only
-            if np.linalg.norm(self.object_truth[:3, 3]) > .004:
-                raise RuntimeError('Estimated centre differs by >4 mm from simulation verification')
-            self.io.object_scene(obj)
-            self.io.allow_touch(['table_top', first+'_left_finger', first+'_right_finger'])
-            self.publish('APPROACH', first+' approaching above the detected shaft')
-            self.io.gripper(first, self.cfg['open_width'])
-            self.io.gripper(second, self.cfg['open_width'])
-            target = obj@donor_grasp
-            self.pick_target = target.copy()
-            above = target.copy()
-            above[2, 3] += self.cfg['approach_height']
-            self.get_logger().info(
-                f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
-                f'{above[2, 3]:.4f}), grasp=({target[0, 3]:.4f}, {target[1, 3]:.4f}, '
-                f'{target[2, 3]:.4f}), descent={self.cfg["approach_height"]:.3f} m')
-            # A reachable above-pick pose can be on an IK branch that cannot
-            # descend. Check its full continuation before moving to that pose.
-            descent = self.io.global_move(first, above, continuation=target)
-            self.publish('DESCEND', 'Straight downward approach at configured slow speed')
-            self.io.execute_prepared_cartesian(descent, self.cfg['descent_speed'])
-            self.publish('CHECK_GRASP_REACH', 'Check measured TCP; supplement a short descent if needed')
-            self.io.ensure_grasp_reached(first, target, self.cfg['descent_speed'], self.settle)
-            self.publish('GRASP', 'Close jaws; validate shaft enclosure before assisted attachment')
-            self.io.gripper(first, self.cfg['close_width'])
-            self.io.assisted_grasp(first)
-            self.pick_secured = True
-            self.io.object_scene(obj, first)
+            obj, donor_grasp, receiver_grasp, test_pose = self.acquire_initial_pick(first, second)
             lifted = obj.copy()
             lifted[2, 3] += self.cfg['lift_height']
             self.io.cartesian(first, [lifted@donor_grasp], self.cfg['descent_speed'])
