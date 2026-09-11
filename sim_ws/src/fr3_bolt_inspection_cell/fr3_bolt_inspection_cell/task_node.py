@@ -379,7 +379,6 @@ class Inspection(Node):
         target = fingertip_table_pick_tcp(
             obj, -self.cfg['grasp_offset'], self.cfg.get('table_z', .72),
             self.cfg.get('fingertip_table_clearance', .005))
-        donor_grasp = np.linalg.inv(obj)@target
         receiver_grasp = grasp_in_object(self.cfg['grasp_offset'], below=True)
         self.report['estimated_pose'] = obj.tolist()
         self.object_truth = np.linalg.inv(obj)@self.io.truth()
@@ -391,15 +390,37 @@ class Inspection(Node):
             f'Pick attempt {attempt}: {first} approaching above the detected shaft')
         self.io.gripper(first, self.cfg['open_width'])
         self.io.gripper(second, self.cfg['open_width'])
+        requested_target = target.copy()
+        descent = None
+        planning_error = None
+        # The geometric 5 mm target is authoritative.  If the exact pose is
+        # outside the current MoveIt collision/workspace model, search upward
+        # in small increments and use the lowest reachable pose instead of
+        # aborting before the gripper can attempt a grasp.
+        for lift in np.arange(0., .0801, .005):
+            candidate = requested_target.copy()
+            candidate[2, 3] += float(lift)
+            above = candidate.copy()
+            above[2, 3] += self.cfg['approach_height']
+            try:
+                descent = self.io.global_move(first, above,
+                                              continuation=candidate)
+                target = candidate
+                break
+            except PlanningFailure as exc:
+                planning_error = exc
+        if descent is None:
+            raise PlanningFailure(
+                f'No reachable fingertip clearance target after 80 mm search: {planning_error}')
+        donor_grasp = np.linalg.inv(obj)@target
         self.pick_target = target.copy()
-        above = target.copy()
-        above[2, 3] += self.cfg['approach_height']
         self.get_logger().info(
             f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
             f'{above[2, 3]:.4f}), grasp=({target[0, 3]:.4f}, {target[1, 3]:.4f}, '
-            f'{target[2, 3]:.4f}), descent={self.cfg["approach_height"]:.3f} m, '
+            f'{target[2, 3]:.4f}), requested_z={requested_target[2, 3]:.4f}, '
+            f'fallback_lift={target[2, 3]-requested_target[2, 3]:.3f} m, '
+            f'descent={self.cfg["approach_height"]:.3f} m, '
             f'fingertip_clearance={self.cfg.get("fingertip_table_clearance", .005)*1000:.1f} mm')
-        descent = self.io.global_move(first, above, continuation=target)
         self.publish('DESCEND', f'Pick attempt {attempt}: straight downward approach')
         self.io.execute_prepared_cartesian(descent, self.cfg['descent_speed'])
         self.publish('CHECK_GRASP_REACH', 'Check measured TCP; supplement a short descent if needed')
