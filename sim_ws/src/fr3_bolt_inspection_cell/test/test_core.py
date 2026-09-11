@@ -182,6 +182,11 @@ def test_invalid_config_rejected(key, value):
 
 
 def test_camera_frames_materials_and_backends():
+    c = config()
+    assert c['point_cloud_camera'] == 'head_camera'
+    assert c['cameras']['waist_camera']['depth'] is False
+    assert c['cameras']['left_d435i']['depth'] is True
+    assert c['cameras']['right_d435i']['depth'] is True
     for mode in ('gazebo', 'mock'):
         root, _ = robot(mode)
         names = {l.get('name') for l in root.findall('link')}
@@ -190,6 +195,11 @@ def test_camera_frames_materials_and_backends():
             assert visual.find('material/color') is not None
         plugins = [p.get('filename') for p in root.findall('.//plugin')]
         assert plugins.count('libgazebo_ros_camera.so') == (4 if mode == 'gazebo' else 0)
+        if mode == 'gazebo':
+            sensors = {s.get('name'): s.get('type') for s in root.findall('.//sensor')}
+            assert sensors['waist_camera_rgb'] == 'camera'
+            assert sensors['left_d435i_rgbd'] == 'depth'
+            assert sensors['right_d435i_rgbd'] == 'depth'
         for joint in root.findall('ros2_control/joint'):
             assert root.find(f"joint[@name='{joint.get('name')}']") is not None
         systems = root.findall('ros2_control')

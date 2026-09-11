@@ -56,6 +56,8 @@ def validate(cfg):
         raise ValueError('max_grasp_attempts must be an integer from 1 to 20')
     if cfg['grasp_test_lift'] >= cfg['lift_height']:
         raise ValueError('grasp_test_lift must be less than lift_height')
+    if cfg['point_cloud_camera'] not in ('head_camera', 'left_d435i', 'right_d435i'):
+        raise ValueError('point_cloud_camera must be head_camera or a wrist D435i')
     if not 0 <= cfg['grasp_depth_offset'] <= cfg['shaft_radius']:
         raise ValueError('grasp_depth_offset must be between zero and shaft_radius')
     extent = cfg['random_position_radius']+cfg['bolt_length']/2
@@ -81,6 +83,8 @@ def validate(cfg):
     if set(cfg['cameras']) != {'waist_camera', 'left_d435i', 'right_d435i'}:
         raise ValueError('Require the fixed waist camera and both wrist D435i cameras')
     for name, camera in cfg['cameras'].items():
+        if type(camera.get('depth', True)) is not bool:
+            raise ValueError(name+' depth must be true or false')
         if any(len(camera[k]) != 3 for k in ('xyz', 'rpy')):
             raise ValueError(name+' needs three xyz/rpy values')
         if not (0 < camera['near'] < camera['far'] and 0 < camera['horizontal_fov'] < math.pi):
@@ -88,6 +92,11 @@ def validate(cfg):
         if camera['rate'] <= 0 or any(type(camera[k]) is not int or not 16 <= camera[k] <= 4096
                                       for k in ('width', 'height')):
             raise ValueError(name+' invalid rate/resolution')
+    if cfg['cameras']['waist_camera'].get('depth', True):
+        raise ValueError('waist_camera must be RGB-only; use head or wrist depth for point clouds')
+    for name in ('left_d435i', 'right_d435i'):
+        if not cfg['cameras'][name].get('depth', True):
+            raise ValueError(name+' must provide depth for wrist point-cloud use')
     return cfg
 
 

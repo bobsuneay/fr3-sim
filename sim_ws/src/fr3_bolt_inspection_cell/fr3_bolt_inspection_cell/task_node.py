@@ -59,7 +59,10 @@ class Inspection(Node):
         self.create_subscription(PointCloud2, self.cfg['cloud_topic'], self.on_cloud, qos_profile_sensor_data)
         self.create_subscription(ModelStates, '/inspection/sim/model_states', self.on_models, qos_profile_sensor_data)
         for name in self.cfg['cameras']:
-            for stream, topic in (('rgb', 'image_raw'), ('depth', 'depth/image_raw')):
+            streams = [('rgb', 'image_raw')]
+            if self.cfg['cameras'][name].get('depth', True):
+                streams.append(('depth', 'depth/image_raw'))
+            for stream, topic in streams:
                 self.create_subscription(Image, f'/{name}/{topic}',
                     lambda msg, key=(name, stream): self.on_image(key, msg), qos_profile_sensor_data)
             self.create_subscription(CameraInfo, f'/{name}/camera_info',
@@ -70,6 +73,9 @@ class Inspection(Node):
         self.create_service(Trigger, '/inspection/randomize_object', self.randomize_object)
         self.create_service(Trigger, '/inspection/stop', self.stop)
         self.create_service(Trigger, '/inspection/get_status', self.status)
+        self.get_logger().info(
+            f"Point-cloud pose source: {self.cfg['point_cloud_camera']} ({self.cfg['cloud_topic']}); "
+            "waist_camera=RGB-only, wrist cameras=RGB-D")
         self.publish('IDLE', 'Ready for explicit start; Gazebo assisted grasp only')
 
     def on_joints(self, msg):
@@ -244,7 +250,7 @@ class Inspection(Node):
         raise RuntimeError('Point-cloud detection failed: '+error)
 
     def capture(self, label, expected_object=None):
-        # All three cameras must provide a fresh RGB/depth pair after settling.
+        # Industrial waist camera is RGB-only; D435i cameras require RGB/depth.
         self.settle()
         after = self.get_clock().now().nanoseconds*1e-9
         deadline = time.monotonic()+8
@@ -255,15 +261,19 @@ class Inspection(Node):
                 images, infos = dict(self.images), dict(self.infos)
             selected = {}
             for camera in self.cfg['cameras']:
-                rgb, depth = images.get((camera, 'rgb')), images.get((camera, 'depth'))
-                if rgb is None or depth is None or camera not in infos:
+                rgb = images.get((camera, 'rgb'))
+                needs_depth = self.cfg['cameras'][camera].get('depth', True)
+                depth = images.get((camera, 'depth')) if needs_depth else None
+                if rgb is None or (needs_depth and depth is None) or camera not in infos:
                     continue
-                a, b = stamp_seconds(rgb[0].header.stamp), stamp_seconds(depth[0].header.stamp)
-                if min(a, b) <= after or abs(a-b) > .05:
+                a = stamp_seconds(rgb[0].header.stamp)
+                b = stamp_seconds(depth[0].header.stamp) if depth is not None else a
+                if a <= after or (depth is not None and abs(a-b) > .05):
                     continue
-                if max(time.monotonic()-rgb[1], time.monotonic()-depth[1]) > self.cfg['max_data_age']:
+                ages = [time.monotonic()-rgb[1]] + ([] if depth is None else [time.monotonic()-depth[1]])
+                if max(ages) > self.cfg['max_data_age']:
                     continue
-                selected[camera] = (rgb[0], depth[0], infos[camera])
+                selected[camera] = (rgb[0], depth[0] if depth is not None else None, infos[camera])
             if len(selected) == len(self.cfg['cameras']):
                 break
             self.stop_event.wait(.05)
@@ -274,10 +284,11 @@ class Inspection(Node):
         meta = {}
         for camera, (rgb, depth, info) in selected.items():
             world_camera = self.io.tf(rgb.header.frame_id, Time.from_msg(rgb.header.stamp))
-            np.savez_compressed(folder/(camera+'.npz'),
-                rgb=np.frombuffer(bytes(rgb.data), dtype=np.uint8),
-                depth=np.frombuffer(bytes(depth.data), dtype=np.uint8),
-                intrinsic=np.array(info.k).reshape(3, 3), world_optical=world_camera)
+            payload = dict(rgb=np.frombuffer(bytes(rgb.data), dtype=np.uint8),
+                           intrinsic=np.array(info.k).reshape(3, 3), world_optical=world_camera)
+            if depth is not None:
+                payload['depth'] = np.frombuffer(bytes(depth.data), dtype=np.uint8)
+            np.savez_compressed(folder/(camera+'.npz'), **payload)
             # Portable viewable RGB preview, preserving row stride.
             if rgb.encoding in ('rgb8', 'bgr8'):
                 pixels = np.frombuffer(bytes(rgb.data), dtype=np.uint8).reshape(rgb.height, rgb.step)
@@ -286,9 +297,12 @@ class Inspection(Node):
                     pixels = pixels[:, :, ::-1]
                 (folder/(camera+'.ppm')).write_bytes(
                     f'P6\n{rgb.width} {rgb.height}\n255\n'.encode()+pixels.tobytes())
-            meta[camera] = {kind: {'stamp': stamp_seconds(m.header.stamp), 'encoding': m.encoding,
-                'height': m.height, 'width': m.width, 'step': m.step, 'is_bigendian': m.is_bigendian}
-                for kind, m in (('rgb', rgb), ('depth', depth))}
+            meta[camera] = {'rgb': {'stamp': stamp_seconds(rgb.header.stamp), 'encoding': rgb.encoding,
+                'height': rgb.height, 'width': rgb.width, 'step': rgb.step, 'is_bigendian': rgb.is_bigendian},
+                'depth': None if depth is None else {
+                    'stamp': stamp_seconds(depth.header.stamp), 'encoding': depth.encoding,
+                    'height': depth.height, 'width': depth.width, 'step': depth.step,
+                    'is_bigendian': depth.is_bigendian}}
         if expected_object is not None:
             # Verify projected centre lies inside fixed inspection camera FOV.
             camera = 'waist_camera'

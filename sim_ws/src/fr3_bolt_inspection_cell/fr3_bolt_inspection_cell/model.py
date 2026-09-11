@@ -139,7 +139,8 @@ def augment(root, cfg, sim):
         element(g, 'preserveFixedJoint').text = 'true'
         g = element(root, 'gazebo', reference=name+'_link')
         element(g, 'material').text = 'Gazebo/Black'
-        sensor = element(g, 'sensor', name=name+'_rgbd', type='depth')
+        sensor = element(g, 'sensor', name=name+('_rgbd' if c.get('depth', True) else '_rgb'),
+                         type='depth' if c.get('depth', True) else 'camera')
         element(sensor, 'always_on').text = 'true'
         element(sensor, 'update_rate').text = str(c['rate'])
         camera = element(sensor, 'camera', name=name)
