@@ -156,6 +156,23 @@ def test_gazebo_mount_links_do_not_self_collide_with_fixed_wrist_chain():
             assert gazebo is not None and gazebo.text == 'true'
 
 
+@pytest.mark.parametrize('mode', ['gazebo', 'mock'])
+def test_linked_fingers_have_only_one_command_interface(mode):
+    from fr3_bolt_inspection_cell.model import linked_controllers
+    root, _ = robot(mode)
+    for side in ('left', 'right'):
+        master, follower = side+'_left_finger_joint', side+'_right_finger_joint'
+        mimic = root.find(f"joint[@name='{follower}']/mimic")
+        assert mimic.get('joint') == master
+        assert float(mimic.get('multiplier')) == 1
+        joint = root.find(f"ros2_control/joint[@name='{follower}']")
+        assert joint.findall('command_interface') == []
+        assert joint.find("param[@name='mimic']").text == master
+        assert root.find(f"ros2_control/joint[@name='{master}']/command_interface") is not None
+        cfg = linked_controllers(mode, None if mode == 'gazebo' else side)
+        assert cfg[side+'_gripper_controller']['ros__parameters']['joints'] == [master]
+
+
 def test_grasp_config_remains_valid():
     # The grasp gate still validates the original controller opening range.
     c = config()

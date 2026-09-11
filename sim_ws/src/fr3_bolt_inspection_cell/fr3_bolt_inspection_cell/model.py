@@ -6,6 +6,48 @@ from fr3_dual_bolt_cell.model import element, fixed, box, inertial
 from .core import validate
 
 
+def linked_controllers(mode, side=None):
+    from fr3_dual_bolt_cell.model import controllers
+    result = controllers(mode, side)
+    manager = 'controller_manager' if mode == 'gazebo' else side+'_controller_manager'
+    for arm in ('left', 'right') if side is None else (side,):
+        name = arm+'_gripper_controller'
+        result[manager]['ros__parameters'][name] = {
+            'type': 'joint_trajectory_controller/JointTrajectoryController'}
+        result[name] = {'ros__parameters': {
+            'joints': [arm+'_left_finger_joint'],
+            'command_interfaces': ['position'], 'state_interfaces': ['position'],
+            'allow_partial_joints_goal': False}}
+        result[arm+'_joint_state_broadcaster']['ros__parameters']['joints'] = (
+            [f'{arm}_j{i}' for i in range(1, 7)] +
+            [arm+'_left_finger_joint', arm+'_right_finger_joint'])
+    return result
+
+
+def link_fingers(root, side):
+    master, follower = side+'_left_finger_joint', side+'_right_finger_joint'
+    # Normalize the scalar naming used by newer versions of the base package.
+    for node in root.iter():
+        for attr in ('name', 'joint'):
+            if node.get(attr) == side+'_gripper_joint':
+                node.set(attr, master)
+    joint = root.find(f"joint[@name='{follower}']")
+    for old in list(joint.findall('mimic')):
+        joint.remove(old)
+    element(joint, 'mimic', joint=master, multiplier='1', offset='0')
+    system = next(s for s in root.findall('ros2_control')
+                  if s.find(f"joint[@name='{master}']") is not None)
+    control = system.find(f"joint[@name='{follower}']")
+    if control is None:
+        control = element(system, 'joint', name=follower)
+        element(control, 'state_interface', name='position')
+        element(control, 'state_interface', name='velocity')
+    for old in list(control.findall('command_interface')) + list(control.findall('param')):
+        control.remove(old)
+    element(control, 'param', name='mimic').text = master
+    element(control, 'param', name='multiplier').text = '1'
+
+
 def simplified_hkv_collisions(link, boxes, keep_mesh=None):
     """Replace unstable CAD collisions with boxes plus an optional tip mesh.
 
@@ -84,6 +126,7 @@ def augment(root, cfg, sim):
     validate(cfg)
     root.set('name', 'fr3_bolt_inspection_cell')
     for side in ('left', 'right'):
+        link_fingers(root, side)
         # The baseline keeps tool0 as a massless coordinate frame. Gazebo can
         # reliably preserve this fixed joint only when both links have inertia.
         tool = root.find(f"link[@name='{side}_tool0']")

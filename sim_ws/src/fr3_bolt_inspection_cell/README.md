@@ -16,6 +16,8 @@
 
 ## 相机和夹爪
 
+每只 HKV 夹爪只有一个开合自由度。控制器只接收 `left_finger_joint` 的单关节目标（开口宽度的一半）；`right_finger_joint` 通过 URDF mimic 和 Gazebo ros2_control mimic 参数按 1:1 跟随。两关节轴方向相反，因此两指对称开合。任务仍读取两指反馈，联动位移差超过 1 mm 则报错。修改控制器和模型后需要重建并重启 launch。
+
 | 相机 | 安装位置与用途 | RGB / 深度 / 点云 |
 |---|---|---|
 | `head_camera` | 保留头部 RGB-D，用于桌面螺丝定位 | `/head_camera/image_raw`、`/head_camera/depth/image_raw`、`/head_camera/points` |

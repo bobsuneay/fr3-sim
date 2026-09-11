@@ -43,6 +43,24 @@ def trajectory(value=.1):
         NS(positions=[0.0]), NS(positions=[value])]))
 
 
+@pytest.mark.parametrize('side', ['left', 'right'])
+def test_gripper_commands_only_master_and_checks_follower(adapter, side):
+    module, io = adapter
+    module.FollowJointTrajectory.Goal = lambda: NS(trajectory=NS())
+    io.fingers = {side: object()}
+    io.action = MagicMock(return_value=NS(error_code=0))
+    positions = [.0175, .0175]
+    io.state = lambda: NS(joint_state=NS(
+        name=[side+'_left_finger_joint', side+'_right_finger_joint'], position=positions))
+    io.gripper(side, .035)
+    goal = io.action.call_args.args[1]
+    assert goal.trajectory.joint_names == [side+'_left_finger_joint']
+    assert goal.trajectory.points[0].positions == [.0175]
+    positions[1] = .0163
+    with pytest.raises(RuntimeError, match='Linked gripper'):
+        io.gripper(side, .035)
+
+
 def test_partial_cartesian_is_replaced_only_after_full_fallback(adapter):
     _, io = adapter
     partial, complete = trajectory(.02), trajectory(.1)

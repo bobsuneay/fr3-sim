@@ -617,20 +617,23 @@ class IO:
         if not 0 <= width <= .10:
             raise ValueError('Invalid gripper width')
         goal = FollowJointTrajectory.Goal()
-        goal.trajectory.joint_names = [side+'_left_finger_joint', side+'_right_finger_joint']
-        goal.trajectory.points = [JointTrajectoryPoint(positions=[width/2]*2,
-            velocities=[0.0, 0.0], time_from_start=duration(3.0))]
+        goal.trajectory.joint_names = [side+'_left_finger_joint']
+        goal.trajectory.points = [JointTrajectoryPoint(positions=[width/2],
+            velocities=[0.0], time_from_start=duration(3.0))]
         result = self.action(self.fingers[side], goal, 15, controller_time=True)
         if result.error_code != 0:
             raise RuntimeError('Gripper trajectory failed: '+result.error_string)
         state = self.state().joint_state
-        measured = [state.position[state.name.index(j)] for j in goal.trajectory.joint_names]
+        measured = [state.position[state.name.index(side+'_'+finger+'_finger_joint')]
+                    for finger in ('left', 'right')]
         self.n.get_logger().info(
             f'Gripper settled: side={side}, requested_gap={width:.4f} m, '
             f'joint_targets=({width/2:.4f}, {width/2:.4f}), '
             f'measured=({measured[0]:.4f}, {measured[1]:.4f})')
         if max(abs(v-width/2) for v in measured) > .0015:
             raise RuntimeError('Gripper position feedback did not reach target')
+        if abs(measured[0]-measured[1]) > .001:
+            raise RuntimeError('Linked gripper fingers differ by more than 1 mm')
 
     def grasp_owner(self):
         response = self.call(self.owner, Trigger.Request())

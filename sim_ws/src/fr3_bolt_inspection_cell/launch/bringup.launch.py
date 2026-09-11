@@ -20,6 +20,7 @@ from fr3_dual_bolt_cell.model import (SIDES, build_model, controllers, manager_m
     moveit_config, read_yaml)
 from fr3_dual_bolt_cell.world import load_scene, world_xml
 from fr3_bolt_inspection_cell.model import augment, inspection_world
+from fr3_bolt_inspection_cell.model import linked_controllers as controllers
 from fr3_bolt_inspection_cell.core import validate
 
 
@@ -71,6 +72,18 @@ def start(context):
               'trajectory_execution.allowed_goal_duration_margin': 2.0,
               'trajectory_execution.allowed_start_tolerance': .01}
     # Avoid launch parsing the SRDF as YAML.
+    semantic = ET.fromstring(moveit['robot_description_semantic'])
+    for side in SIDES:
+        master = side+'_left_finger_joint'
+        for parent in semantic.iter():
+            for joint in list(parent.findall('joint')):
+                if joint.get('name') == side+'_right_finger_joint':
+                    parent.remove(joint)
+                elif joint.get('name') == side+'_gripper_joint':
+                    joint.set('name', master)
+        mapping = moveit['moveit_simple_controller_manager'][side+'_gripper_controller']
+        mapping.update(type='FollowJointTrajectory', action_ns='follow_joint_trajectory', joints=[master])
+    moveit['robot_description_semantic'] = ET.tostring(semantic, encoding='unicode')
     moveit['robot_description_semantic'] = ParameterValue(moveit['robot_description_semantic'], value_type=str)
     rsp = Node(package='robot_state_publisher', executable='robot_state_publisher',
                name='robot_state_publisher', parameters=[description], output='screen')
