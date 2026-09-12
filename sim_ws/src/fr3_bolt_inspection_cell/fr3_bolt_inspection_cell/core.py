@@ -147,9 +147,11 @@ def estimate_bolt(points, cfg):
         along, across = cloud@axis, cloud@lateral
         lo, hi = np.quantile(along, [.01, .99])
         width = np.quantile(across, .99)-np.quantile(across, .01)
-        if not (.028 <= hi-lo <= .042 and .003 <= width <= .016):
+        if not (.8*cfg['bolt_length'] <= hi-lo <= 1.2*cfg['bolt_length'] and
+                .75*cfg['shaft_radius'] <= width <= 2.7*cfg['head_radius']):
             continue
-        ends = [across[along < lo+.005], across[along > hi-.005]]
+        end_length = .8*cfg['head_length']
+        ends = [across[along < lo+end_length], across[along > hi-end_length]]
         spans = [np.ptp(e) if len(e) >= 4 else 0 for e in ends]
         resolved = min(spans) > 0 and max(spans)/min(spans) > 1.15
         if resolved and spans[0] > spans[1]:
@@ -164,7 +166,7 @@ def estimate_bolt(points, cfg):
         pose = np.eye(4)
         pose[:3, :3] = np.column_stack((axis, lateral, [0, 0, 1]))
         pose[:3, 3] = center
-        candidates.append(Estimate(pose, np.array([hi-lo, width, .009]), cloud, resolved))
+        candidates.append(Estimate(pose, np.array([hi-lo, width, 2*cfg['head_radius']]), cloud, resolved))
     if len(candidates) != 1:
         raise ValueError(f'Expected one isolated bolt, found {len(candidates)}; narrow ROI')
     if not candidates[0].head_resolved:
@@ -188,20 +190,29 @@ def table_pick_tcp(object_pose, axial_offset, depth_offset):
     return result
 
 
-def fingertip_table_pick_tcp(object_pose, axial_offset, table_z, clearance,
-                             fingertip_palm_z=.0686, tcp_palm_z=.149):
-    """Place the modeled fingertip at an explicit height above the tabletop.
+def fingertip_world_min_z(tcp_pose, tip_points_tcp):
+    """Lowest point of both installed finger meshes for this actual TCP pose."""
+    points = np.asarray(tip_points_tcp, dtype=float)
+    tcp = np.asarray(tcp_pose, dtype=float)
+    if (points.ndim != 2 or points.shape[1] != 3 or not len(points) or
+            tcp.shape != (4, 4) or not np.all(np.isfinite(points)) or
+            not np.all(np.isfinite(tcp))):
+        raise ValueError('Require a finite TCP pose and nonempty fingertip points')
+    return float(np.min(points @ tcp[2, :3] + tcp[2, 3]))
 
-    The fingertip proxy is measured in the palm frame.  The TCP is fixed
-    ``tcp_palm_z`` metres along that same frame, so solving the transform is
-    more reliable than adding an arbitrary world-Z offset.  The returned pose
-    keeps the estimated bolt orientation and axial grasp point unchanged.
+
+def fingertip_table_pick_tcp(object_pose, axial_offset, table_z, clearance, tip_points_tcp):
+    """Set height from installed finger meshes and current jaw opening.
+
+    The mesh points include the URDF joint, mesh-origin, scale, and TCP
+    transforms. Their lowest world-Z support point determines the clearance,
+    including tilted TCP orientations. The estimated XY grasp and orientation
+    are preserved. A slider proxy or an assumed palm-to-tip offset is not used.
     """
+    if not math.isfinite(table_z) or not math.isfinite(clearance) or clearance <= 0:
+        raise ValueError('Require finite tabletop height and positive clearance')
     result = np.asarray(object_pose, dtype=float) @ grasp_in_object(axial_offset)
-    tip_in_tcp = np.array([0., 0., fingertip_palm_z-tcp_palm_z, 1.])
-    tip_world = result @ tip_in_tcp
-    result = result.copy()
-    result[2, 3] += table_z + clearance - tip_world[2]
+    result[2, 3] += table_z + clearance - fingertip_world_min_z(result, tip_points_tcp)
     return result
 
 

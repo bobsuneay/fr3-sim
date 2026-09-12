@@ -20,7 +20,7 @@ def linked_controllers(mode, side=None):
             'allow_partial_joints_goal': False}}
         result[arm+'_joint_state_broadcaster']['ros__parameters']['joints'] = (
             [f'{arm}_j{i}' for i in range(1, 7)] +
-            [arm+'_left_finger_joint', arm+'_right_finger_joint'+('_mimic' if mode == 'gazebo' else '')])
+            [arm+'_left_finger_joint'])
     return result
 
 
@@ -127,6 +127,19 @@ def augment(root, cfg, sim):
     root.set('name', 'fr3_bolt_inspection_cell')
     for side in ('left', 'right'):
         link_fingers(root, side)
+        if root.findall('ros2_control'):
+            # Spawn the two physical fingers at the same open position; zero
+            # overlaps the inward HKV pads before the controller can start.
+            for system in root.findall('ros2_control'):
+                for which in ('left', 'right'):
+                    position = system.find(
+                        f"joint[@name='{side}_{which}_finger_joint']/state_interface[@name='position']")
+                    if position is None:
+                        continue
+                    initial = position.find("param[@name='initial_value']")
+                    if initial is None:
+                        initial = element(position, 'param', name='initial_value')
+                    initial.text = str(cfg['open_width']/2)
         # The baseline keeps tool0 as a massless coordinate frame. Gazebo can
         # reliably preserve this fixed joint only when both links have inertia.
         tool = root.find(f"link[@name='{side}_tool0']")
@@ -226,6 +239,8 @@ def inspection_world(base_xml, cfg):
     element(ros, 'namespace').text = '/inspection/sim'
     element(p, 'robot_model').text = 'fr3_dual_cell'
     element(p, 'object_model').text = cfg['simulation_entity']
+    for key in ('bolt_length', 'shaft_radius', 'head_length'):
+        element(p, key).text = str(cfg[key])
     # State is used exclusively to validate grasp/centre drift, never to estimate a pick.
     p = element(world, 'plugin', name='inspection_state', filename='libgazebo_ros_state.so')
     element(element(p, 'ros'), 'namespace').text = '/inspection/sim'

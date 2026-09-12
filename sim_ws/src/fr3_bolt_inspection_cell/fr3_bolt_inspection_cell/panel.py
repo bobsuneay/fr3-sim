@@ -52,6 +52,8 @@ def main():
             feedback.receive(msg, time.monotonic())
 
     node.create_subscription(JointState, '/joint_states', joints, qos_profile_sensor_data)
+    node.create_subscription(JointState, '/inspection/sim/gripper_states', joints,
+                             qos_profile_sensor_data)
     for name in cameras:
         node.create_subscription(Image, '/'+name+'/image_raw',
             lambda msg, n=name: receive(n, msg), qos_profile_sensor_data)

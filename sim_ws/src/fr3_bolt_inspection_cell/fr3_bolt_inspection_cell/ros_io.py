@@ -183,8 +183,12 @@ class IO:
         names += [f'{s}_{f}_finger_joint' for s in ('left', 'right') for f in ('left', 'right')]
         with self.n.data_lock:
             values = [self.n.joints.get(name) for name in names]
-        if any(v is None or now-v[1] > self.c['max_data_age'] for v in values):
-            raise RuntimeError('Missing/stale joint feedback; need all 16 joints')
+        unavailable = [name for name, value in zip(names, values)
+                       if value is None or not np.isfinite(value[0]) or
+                       not 0 <= now-value[1] <= self.c['max_data_age']]
+        if unavailable:
+            raise RuntimeError('Missing/stale measured joint feedback: '+', '.join(unavailable)+
+                               '; simulation finger feedback: /inspection/sim/gripper_states')
         result.joint_state.name = names
         result.joint_state.position = [v[0] for v in values]
         result.is_diff = True
@@ -624,13 +628,20 @@ class IO:
         if result.error_code != 0:
             raise RuntimeError('Gripper trajectory failed: '+result.error_string)
         state = self.state().joint_state
-        measured = [state.position[state.name.index(side+'_'+finger+'_finger_joint')]
-                    for finger in ('left', 'right')]
+        master = state.position[state.name.index(side+'_left_finger_joint')]
+        follower_name = side+'_right_finger_joint'
+        follower = state.position[state.name.index(follower_name)]
+        measured = [master, follower]
         self.n.get_logger().info(
             f'Gripper settled: side={side}, requested_gap={width:.4f} m, '
             f'joint_targets=({width/2:.4f}, {width/2:.4f}), '
             f'measured=({measured[0]:.4f}, {measured[1]:.4f})')
-        if max(abs(v-width/2) for v in measured) > .0015:
+        # HKV inward pads protrude 1.05 mm beyond each slider zero.
+        # Shaft contact stops each slider at radius + that protrusion.
+        contact_q = self.c['shaft_radius'] + .00105
+        contact_stop = (abs(width-self.c['close_width']) < 1e-8 and
+                        all(abs(v-contact_q) <= .0015 for v in measured))
+        if max(abs(v-width/2) for v in measured) > .0015 and not contact_stop:
             raise RuntimeError('Gripper position feedback did not reach target')
         if abs(measured[0]-measured[1]) > .001:
             raise RuntimeError('Linked gripper fingers differ by more than 1 mm')
@@ -683,6 +694,9 @@ class IO:
         return matrix(res.state.pose)
 
     def relocate_object(self, world_object):
+        """Move the Gazebo model (whose bolt axis is Z), verify, then update MoveIt."""
+        self.n.get_logger().info(
+            f'Relocate {self.c["simulation_entity"]}: requested XYZ={world_object[:3, 3].tolist()}')
         request = SetEntityState.Request()
         request.state = EntityState()
         request.state.name = self.c['simulation_entity']
@@ -693,17 +707,27 @@ class IO:
         response = self.call(client, request)
         if not response.success:
             raise RuntimeError('Gazebo refused object relocation')
-        self.object_scene(world_object)
+        actual = self.truth()
+        error = np.linalg.norm(actual[:3, 3]-world_object[:3, 3])
+        angle = Rotation.from_matrix(world_object[:3, :3].T@actual[:3, :3]).magnitude()
+        if error > .003 or angle > .12:
+            raise RuntimeError(
+                f'Gazebo relocation was not confirmed: position error={error*1000:.1f} mm, '
+                f'angle error={angle:.3f} rad')
+        # The physical model uses local Z for its bolt axis. Perception and
+        # object_scene use local X. Avoid inserting a standing bolt in MoveIt.
+        model_to_object = np.eye(4)
+        model_to_object[:3, :3] = Rotation.from_euler('y', -np.pi/2).as_matrix()
+        self.object_scene(actual@model_to_object)
+        self.n.get_logger().info(
+            f'Relocation confirmed: actual XYZ={actual[:3, 3].tolist()}, error={error*1000:.2f} mm')
+        return actual
 
     def _available_service(self, clients):
         """Return the first advertised service, including Gazebo global fallback."""
         for client in clients:
             if client is None:
                 continue
-            if not hasattr(client, 'wait_for_service'):
-                # Lightweight test doubles and custom adapters are already
-                # selected by their caller; do not probe them as ROS clients.
-                return client
             if client.wait_for_service(timeout_sec=.25):
                 return client
         names = ', '.join(getattr(c, 'srv_name', '<unknown>') for c in clients)

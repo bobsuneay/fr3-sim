@@ -20,7 +20,8 @@ from tf2_ros import Buffer, TransformListener
 import yaml
 from .core import (validate, estimate_bolt, grasp_in_object, centered_views,
                    interpolate_object, random_disk_xy, transform)
-from .core import fingertip_table_pick_tcp
+from .core import fingertip_table_pick_tcp, fingertip_world_min_z
+from .geometry import fingertip_points_tcp
 from .ros_io import IO, PlanningFailure, matrix
 from .handover import transfer
 from .retry import prepare_pick_retry
@@ -36,10 +37,13 @@ class Inspection(Node):
         super().__init__('bolt_inspection_task')
         self.declare_parameter('config_file', '')
         self.declare_parameter('arms_file', '')
+        self.declare_parameter('fingertip_geometry_file', '')
         self.declare_parameter('mode', 'mock')
         self.declare_parameter('enable_execution', False)
         self.cfg = validate(yaml.safe_load(Path(self.get_parameter('config_file').value).read_text()))
         self.arms = yaml.safe_load(Path(self.get_parameter('arms_file').value).read_text())
+        self.fingertips = yaml.safe_load(
+            Path(self.get_parameter('fingertip_geometry_file').value).read_text())
         self.stop_event = threading.Event()
         self.data_lock = threading.Lock()
         self.run_lock = threading.Lock()
@@ -57,6 +61,8 @@ class Inspection(Node):
         self.status_pub = self.create_publisher(String, '/inspection/status',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_subscription(JointState, '/joint_states', self.on_joints, qos_profile_sensor_data)
+        self.create_subscription(JointState, '/inspection/sim/gripper_states', self.on_joints,
+                                 qos_profile_sensor_data)
         self.create_subscription(PointCloud2, self.cfg['cloud_topic'], self.on_cloud, qos_profile_sensor_data)
         self.create_subscription(ModelStates, '/inspection/sim/model_states', self.on_models, qos_profile_sensor_data)
         for name in self.cfg['cameras']:
@@ -166,27 +172,49 @@ class Inspection(Node):
             if self.get_parameter('mode').value != 'gazebo':
                 res.message = 'Random position is available in Gazebo mode only'
                 return res
+            self.stop_event.clear()
+            previous_phase = self.phase
+            self.publish('RANDOMIZING', 'Checking ownership and waiting for stationary arms')
+            # Service clients share the node's default mutually exclusive callback
+            # group. Waiting here for a response would prevent it from completing.
+            self.worker = threading.Thread(target=self.run_randomize,
+                kwargs={'previous_phase': previous_phase}, daemon=True)
+            self.worker.start()
+            res.success, res.message = True, 'Randomization started; monitor /inspection/status for the result'
+            return res
+
+    def run_randomize(self, previous_phase):
+        try:
+            self.io.check()
+            if self.io.grasp_owner():
+                raise RuntimeError('A gripper holds the object; position unchanged')
+            self.io.wait_stationary()
+            self.io.check()
+            if self.io.grasp_owner():
+                raise RuntimeError('Object acquired while waiting; position unchanged')
+            xy = random_disk_xy(self.cfg['random_position_center'],
+                                self.cfg['random_position_radius'], np.random.default_rng())
+            # The Gazebo model's bolt axis is local Z; perception uses local X.
+            world_model = transform([xy[0], xy[1],
+                self.cfg['table_z']+self.cfg['head_radius']+.0005], [0, np.pi/2, 0])
+            self.publish('RANDOMIZING',
+                f'Moving object to x={xy[0]:.4f}, y={xy[1]:.4f} and verifying feedback')
             try:
-                self.stop_event.clear()
-                if self.io.grasp_owner():
-                    raise RuntimeError('A gripper holds the object; position unchanged')
-                self.io.wait_stationary()
-                xy = random_disk_xy(self.cfg['random_position_center'],
-                                    self.cfg['random_position_radius'], np.random.default_rng())
-                world_object = transform([xy[0], xy[1],
-                    self.cfg['table_z']+self.cfg['head_radius']+.0005], [0, np.pi/2, 0])
-                self.io.relocate_object(world_object)
+                actual = self.io.relocate_object(world_model)
+            finally:
+                # A timed-out request may already have moved the model. Never
+                # retain a detection/target from before an attempted relocation.
                 with self.data_lock:
                     self.cloud = None
                     self.object_state = None
                 self.pick_target = None
-                self.publish(self.phase,
-                    f'Object randomized to x={xy[0]:.4f}, y={xy[1]:.4f}; next pick will redetect')
-                res.success = True
-                res.message = f'Object moved to ({xy[0]:.4f}, {xy[1]:.4f}) m'
-            except Exception as exc:
-                res.message = str(exc)
-            return res
+            self.io.check()
+            self.publish(previous_phase,
+                f'Object randomized and verified at x={actual[0, 3]:.4f}, '
+                f'y={actual[1, 3]:.4f}; next pick will redetect')
+        except Exception as exc:
+            self.publish('STOPPED' if self.stop_event.is_set() else 'FAILED',
+                         f'Randomization failed: {exc}')
 
     def status(self, req, res):
         with self.run_lock:
@@ -270,7 +298,7 @@ class Inspection(Node):
                     continue
                 a = stamp_seconds(rgb[0].header.stamp)
                 b = stamp_seconds(depth[0].header.stamp) if depth is not None else a
-                if a <= after or (depth is not None and abs(a-b) > .05):
+                if min(a, b) <= after or (depth is not None and abs(a-b) > .05):
                     continue
                 ages = [time.monotonic()-rgb[1]] + ([] if depth is None else [time.monotonic()-depth[1]])
                 if max(ages) > self.cfg['max_data_age']:
@@ -368,7 +396,8 @@ class Inspection(Node):
         actual = self.io.truth()
         # Safe even when attachment was never applied: remove the named
         # attached object and replace its current world collision geometry.
-        self.io.object_scene(actual, previous=first)
+        # truth() is the physical model frame (bolt axis Z); MoveIt uses axis X.
+        self.io.object_scene(actual@transform(rpy=(0, -np.pi/2, 0)), previous=first)
         self.pick_secured = False
         prepare_pick_retry(self.io, first, self.arms, self.cfg, self.pick_target, self.settle)
 
@@ -378,9 +407,12 @@ class Inspection(Node):
             f'Pick attempt {attempt}/{self.cfg["max_grasp_attempts"]}: waiting for three point-cloud estimates')
         estimate = self.perceive()
         obj = estimate.pose
+        open_positions = {f'{first}_{finger}_finger_joint': self.cfg['open_width']/2
+                          for finger in ('left', 'right')}
+        tip_points = fingertip_points_tcp(self.fingertips[first], open_positions)
         target = fingertip_table_pick_tcp(
-            obj, -self.cfg['grasp_offset'], self.cfg.get('table_z', .72),
-            self.cfg.get('fingertip_table_clearance', .005))
+            obj, -self.cfg['grasp_offset'], self.cfg['table_z'],
+            self.cfg['fingertip_table_clearance'], tip_points)
         receiver_grasp = grasp_in_object(self.cfg['grasp_offset'], below=True)
         self.report['estimated_pose'] = obj.tolist()
         self.object_truth = np.linalg.inv(obj)@self.io.truth()
@@ -392,41 +424,22 @@ class Inspection(Node):
             f'Pick attempt {attempt}: {first} approaching above the detected shaft')
         self.io.gripper(first, self.cfg['open_width'])
         self.io.gripper(second, self.cfg['open_width'])
-        requested_target = target.copy()
-        descent = None
-        planning_error = None
-        # The geometric 5 mm target is authoritative.  If the exact pose is
-        # outside the current MoveIt collision/workspace model, search upward
-        # in small increments and use the lowest reachable pose instead of
-        # aborting before the gripper can attempt a grasp.
-        for lift in np.arange(0., .0801, .005):
-            candidate = requested_target.copy()
-            candidate[2, 3] += float(lift)
-            above = candidate.copy()
-            above[2, 3] += self.cfg['approach_height']
-            try:
-                descent = self.io.global_move(first, above,
-                                              continuation=candidate)
-                target = candidate
-                break
-            except PlanningFailure as exc:
-                planning_error = exc
-        if descent is None:
-            raise PlanningFailure(
-                f'No reachable fingertip clearance target after 80 mm search: {planning_error}')
+        above = target.copy()
+        above[2, 3] += self.cfg['approach_height']
         donor_grasp = np.linalg.inv(obj)@target
         self.pick_target = target.copy()
         self.get_logger().info(
             f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
             f'{above[2, 3]:.4f}), grasp=({target[0, 3]:.4f}, {target[1, 3]:.4f}, '
-            f'{target[2, 3]:.4f}), requested_z={requested_target[2, 3]:.4f}, '
-            f'fallback_lift={target[2, 3]-requested_target[2, 3]:.3f} m, '
+            f'{target[2, 3]:.4f}), tip_min_z={fingertip_world_min_z(target, tip_points):.4f}, '
             f'descent={self.cfg["approach_height"]:.3f} m, '
-            f'fingertip_clearance={self.cfg.get("fingertip_table_clearance", .005)*1000:.1f} mm')
+            f'fingertip_clearance={self.cfg["fingertip_table_clearance"]*1000:.1f} mm')
+        descent = self.io.global_move(first, above, continuation=target)
         self.publish('DESCEND', f'Pick attempt {attempt}: straight downward approach')
         self.io.execute_prepared_cartesian(descent, self.cfg['descent_speed'])
         self.publish('CHECK_GRASP_REACH', 'Check measured TCP; supplement a short descent if needed')
         self.io.ensure_grasp_reached(first, target, self.cfg['descent_speed'], self.settle)
+        self.check_fingertip_clearance(first)
         self.publish('GRASP', f'Pick attempt {attempt}: close jaws and request assisted contact validation')
         self.io.gripper(first, self.cfg['close_width'])
         self.io.assisted_grasp(first)
@@ -446,6 +459,22 @@ class Inspection(Node):
         self.publish('GRASP_CONFIRMED',
             f'Object followed test lift; tracking error={drift*1000:.2f} mm')
         return obj, donor_grasp, receiver_grasp, test_pose
+
+    def check_fingertip_clearance(self, side):
+        """Use fresh physical finger feedback and FK before allowing closure."""
+        actual = self.io.tcp_pose(side)
+        state = self.io.state().joint_state
+        points = fingertip_points_tcp(self.fingertips[side], dict(zip(state.name, state.position)))
+        actual_clearance = fingertip_world_min_z(actual, points)-self.cfg['table_z']
+        desired = self.cfg['fingertip_table_clearance']
+        self.get_logger().info(
+            f'Fingertip clearance: side={side}, measured={actual_clearance*1000:.2f} mm, '
+            f'target={desired*1000:.2f} mm')
+        if abs(actual_clearance-desired) > .001:
+            raise RuntimeError(
+                f'Fingertip clearance out of 1 mm tolerance: {actual_clearance*1000:.2f} mm; '
+                'jaws remain open')
+        self.report['fingertip_clearance'] = {'side': side, 'target': desired, 'measured': actual_clearance}
 
     def acquire_initial_pick(self, first, second):
         failures = self.report.setdefault('pick_attempts', [])

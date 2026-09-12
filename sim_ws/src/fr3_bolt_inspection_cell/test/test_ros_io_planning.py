@@ -31,7 +31,8 @@ def adapter(monkeypatch):
     io.n = MagicMock()
     io.c = dict(joint_speed=.12, joint_acceleration=.15, cartesian_step=.003,
                 joint_step_limit=.2, center_tolerance=.003, angular_tolerance=.12,
-                grasp_reach_tolerance=.003, grasp_recovery_max=.025)
+                grasp_reach_tolerance=.003, grasp_recovery_max=.025,
+                shaft_radius=.004, close_width=.004)
     io.move, io.cart = object(), object()
     io.state = lambda: NS(joint_state=NS(name=['right_j1'], position=[0.0]))
     io.execute = MagicMock()
@@ -59,6 +60,22 @@ def test_gripper_commands_only_master_and_checks_follower(adapter, side):
     positions[1] = .0163
     with pytest.raises(RuntimeError, match='Linked gripper'):
         io.gripper(side, .035)
+
+
+@pytest.mark.parametrize('positions,accepted', [([.00505, .00505], True),
+    ([.0175, .0175], False), ([.00505, .007], False)])
+def test_close_accepts_shaft_contact_but_not_still_open(adapter, positions, accepted):
+    module, io = adapter
+    module.FollowJointTrajectory.Goal = lambda: NS(trajectory=NS())
+    io.fingers = {'right': object()}
+    io.action = MagicMock(return_value=NS(error_code=0))
+    io.state = lambda: NS(joint_state=NS(name=['right_left_finger_joint',
+        'right_right_finger_joint'], position=positions))
+    if accepted:
+        io.gripper('right', .004)
+    else:
+        with pytest.raises(RuntimeError):
+            io.gripper('right', .004)
 
 
 def test_partial_cartesian_is_replaced_only_after_full_fallback(adapter):
@@ -376,13 +393,15 @@ def test_retry_waits_for_stable_feedback_in_simulation_time(adapter, keeps_movin
 
 def test_relocate_object_stops_motion_and_replaces_planning_scene(adapter):
     module, io = adapter
-    io.set_entity = object()
+    io.set_entity = MagicMock()
     io.c['simulation_entity'] = 'bolt_00_00'
     module.EntityState = NS
     module.SetEntityState.Request = NS
     target = np.eye(4)
+    target[:3, :3] = module.Rotation.from_euler('y', np.pi/2).as_matrix()
     target[:3, 3] = [.52, -.18, .7265]
     io.call = MagicMock(return_value=NS(success=True))
+    io.truth = MagicMock(return_value=target.copy())
     io.object_scene = MagicMock()
     io.relocate_object(target)
     request = io.call.call_args.args[1]
@@ -390,12 +409,14 @@ def test_relocate_object_stops_motion_and_replaces_planning_scene(adapter):
     assert request.state.reference_frame == 'world'
     assert [request.state.pose.position.x, request.state.pose.position.y,
             request.state.pose.position.z] == pytest.approx([.52, -.18, .7265])
-    io.object_scene.assert_called_once_with(target)
+    scene = io.object_scene.call_args.args[0]
+    assert np.allclose(scene[:3, 3], target[:3, 3])
+    assert np.allclose(scene[:3, :3], np.eye(3))
 
 
 def test_relocate_object_failure_does_not_change_planning_scene(adapter):
     module, io = adapter
-    io.set_entity = object()
+    io.set_entity = MagicMock()
     io.c['simulation_entity'] = 'bolt_00_00'
     module.EntityState = NS
     module.SetEntityState.Request = NS
@@ -404,3 +425,31 @@ def test_relocate_object_failure_does_not_change_planning_scene(adapter):
     with pytest.raises(RuntimeError, match='refused object relocation'):
         io.relocate_object(np.eye(4))
     io.object_scene.assert_not_called()
+
+
+def test_relocation_success_response_requires_actual_motion(adapter):
+    module, io = adapter
+    io.set_entity = MagicMock()
+    io.c['simulation_entity'] = 'bolt_00_00'
+    module.EntityState = NS
+    module.SetEntityState.Request = NS
+    io.call = MagicMock(return_value=NS(success=True))
+    io.truth = MagicMock(return_value=np.eye(4))
+    io.object_scene = MagicMock()
+    target = np.eye(4)
+    target[0, 3] = .05
+    with pytest.raises(RuntimeError, match='not confirmed'):
+        io.relocate_object(target)
+    io.object_scene.assert_not_called()
+
+
+def test_entity_service_fallback_and_missing_services(adapter):
+    _, io = adapter
+    primary = MagicMock(srv_name='/inspection/sim/set_entity_state')
+    fallback = MagicMock(srv_name='/gazebo/set_entity_state')
+    primary.wait_for_service.return_value = False
+    fallback.wait_for_service.return_value = True
+    assert io._available_service((primary, fallback)) is fallback
+    fallback.wait_for_service.return_value = False
+    with pytest.raises(RuntimeError, match='/inspection/sim/set_entity_state'):
+        io._available_service((primary, fallback))

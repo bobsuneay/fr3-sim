@@ -50,10 +50,10 @@ bolts:
   spacing_xy:
   - 0.055
   - 0.07
-  length: 0.035
-  shaft_radius: 0.004
-  head_radius: 0.006
-  head_length: 0.006
+  length: 0.045
+  shaft_radius: 0.006
+  head_radius: 0.009
+  head_length: 0.008
   density: 7850.0
   spawn_clearance: 0.0005
 physics:

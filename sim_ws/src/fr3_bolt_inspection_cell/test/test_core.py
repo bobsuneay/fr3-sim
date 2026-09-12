@@ -29,11 +29,15 @@ def robot(mode='mock'):
     return augment(build_model(BASE, SHARE/'config/scene.yaml', arms, mode), config(), mode == 'gazebo'), arms
 
 
-def cloud(yaw=.4, noisy=True):
+def cloud(yaw=.4, noisy=True, cfg=None):
+    cfg = config() if cfg is None else cfg
     rng = np.random.default_rng(712)
     # Visible upper half of a horizontal bolt; denser head and shuffled points.
     points = []
-    for lo, hi, radius in ((-.0175, .0115, .004), (.0115, .0175, .006)):
+    half = cfg['bolt_length']/2
+    neck = half-cfg['head_length']
+    for lo, hi, radius in ((-half, neck, cfg['shaft_radius']),
+                           (neck, half, cfg['head_radius'])):
         x = np.linspace(lo, hi, 65)
         theta = np.linspace(.08, np.pi-.08, 33)
         points.extend([a, radius*np.cos(b), radius*np.sin(b)] for a in x for b in theta)
@@ -41,13 +45,17 @@ def cloud(yaw=.4, noisy=True):
     if noisy:
         p += rng.normal(0, .00008, p.shape)
     r = Rotation.from_euler('z', yaw).as_matrix()
-    return p@r.T+[.50, -.2, .7245]
+    return p@r.T+[.50, -.2, cfg['table_z']+cfg['head_radius']+.0005]
 
 
 @pytest.mark.parametrize('angle', [0, .6, 2.6, -2.9])
-def test_partial_cloud_finds_head_and_pose(angle):
-    result = estimate_bolt(cloud(angle), config())
-    assert np.linalg.norm(result.pose[:3, 3]-[.50, -.2, .7245]) < .0008
+@pytest.mark.parametrize('original', [False, True])
+def test_partial_cloud_finds_head_and_pose(angle, original):
+    cfg = config()
+    if original:
+        cfg.update(bolt_length=.035, shaft_radius=.004, head_radius=.006, head_length=.006)
+    result = estimate_bolt(cloud(angle, cfg=cfg), cfg)
+    assert np.linalg.norm(result.pose[:3, 3]-[.50, -.2, cfg['table_z']+cfg['head_radius']]) < .0008
     assert result.pose[:3, 0] @ np.array([np.cos(angle), np.sin(angle), 0]) > .998
     assert result.head_resolved
 
@@ -172,9 +180,8 @@ def test_linked_fingers_have_only_one_command_interface(mode):
         cfg = linked_controllers(mode, None if mode == 'gazebo' else side)
         assert cfg[side+'_gripper_controller']['ros__parameters']['joints'] == [master]
         feedback = cfg[side+'_joint_state_broadcaster']['ros__parameters']['joints']
-        assert (follower+'_mimic' if mode == 'gazebo' else follower) in feedback
-        if mode == 'gazebo':
-            assert follower not in feedback
+        assert master in feedback
+        assert follower not in feedback
 
 
 def test_grasp_config_remains_valid():
@@ -295,11 +302,56 @@ def test_initial_collision_geometry():
             assert not any(g.obb_overlap(b, (np.array(center), np.eye(3), np.array(size)/2)) for b in entries), (link, table)
 
 
+def test_staging_home_is_mirrored_in_front_with_bent_wrists():
+    root, arms = robot()
+    sys.path.insert(0, str(BASE/'test'))
+    import test_geometry as g
+    frames = g.poses(root, arms)
+    reflection = np.diag([1, -1, 1])
+    for suffix in ('upperarm_link', 'forearm_link', 'wrist3_link', 'gripper_tcp'):
+        assert np.allclose(frames['left_'+suffix][:3, 3],
+                           reflection @ frames['right_'+suffix][:3, 3], atol=1e-8)
+    for side in ('left', 'right'):
+        x, y, z = frames[side+'_gripper_tcp'][:3, 3]
+        assert .30 < x < .40 and .25 < abs(y) < .35 and .92 < z < 1.02
+        assert abs(arms[side]['initial'][4]) > .7
+        for i, value in enumerate(arms[side]['initial'], 1):
+            limit = root.find(f"joint[@name='{side}_j{i}']/limit")
+            assert float(limit.get('lower')) < value < float(limit.get('upper'))
+
+
+@pytest.mark.parametrize('side', ['left', 'right'])
+def test_mesh_derived_height_preserves_five_mm_clearance(side):
+    from fr3_bolt_inspection_cell.geometry import fingertip_geometry, fingertip_points_tcp
+    from fr3_bolt_inspection_cell.core import fingertip_table_pick_tcp, fingertip_world_min_z
+    root, _ = robot()
+    geometry = fingertip_geometry(root, side,
+        lambda uri: BASE / uri.removeprefix('package://fr3_dual_bolt_cell/'))
+    positions = {f'{side}_{f}_finger_joint': config()['open_width']/2 for f in ('left', 'right')}
+    points = fingertip_points_tcp(geometry, positions)
+    target = fingertip_table_pick_tcp(transform([.5, -.2, .7265]), -.01, .720, .005, points)
+    assert target[2, 3] == pytest.approx(.7227, abs=1e-6)
+    assert fingertip_world_min_z(target, points) == pytest.approx(.725)
+    tilted = transform([.5, -.2, .7265], [.2, -.1, .4])
+    target = fingertip_table_pick_tcp(tilted, -.01, .720, .005, points)
+    assert fingertip_world_min_z(target, points) == pytest.approx(.725)
+
+
 def test_world_has_one_bolt_and_explicit_assistance():
     world = ET.fromstring(inspection_world(world_xml(load_scene(SHARE/'config/scene.yaml')), config()))
     bolts = [m for m in world.findall('world/model') if m.get('name').startswith('bolt_')]
     assert len(bolts) == 1
     assert world.find("world/plugin[@name='inspection_grasp']/object_model").text == bolts[0].get('name')
+    cfg = config()
+    scene = load_scene(SHARE/'config/scene.yaml')
+    for key in ('bolt_length', 'shaft_radius', 'head_length'):
+        assert float(world.find(f"world/plugin[@name='inspection_grasp']/{key}").text) == cfg[key]
+    for key in ('shaft_radius', 'head_radius', 'head_length'):
+        assert scene['bolts'][key] == cfg[key]
+    assert scene['bolts']['length'] == cfg['bolt_length']
+    for part in ('shaft', 'head'):
+        cylinder = bolts[0].find(f"link/collision[@name='{part}_collision']/geometry/cylinder")
+        assert float(cylinder.find('radius').text) == cfg[part+'_radius']
 
 
 def test_default_pick_and_handover_have_valid_fk_witnesses():
@@ -329,6 +381,10 @@ def test_default_pick_and_handover_have_valid_fk_witnesses():
                 limit = root.find(f"joint[@name='{side}_j{i}']/limit")
                 assert float(limit.get('lower')) < value < float(limit.get('upper'))
         frames = g.poses(root, arms)
+        for joint in root.findall("joint[@type='prismatic']"):
+            child = joint.find('child').get('link')
+            axis = np.fromstring(joint.find('axis').get('xyz'), sep=' ')
+            frames[child][:3, 3] += frames[child][:3, :3] @ axis * (c['open_width']/2)
         for side, target in targets.items():
             assert np.allclose(frames[side+'_gripper_tcp'], target, atol=2e-5)
         boxes = g.oriented_boxes(local, frames)

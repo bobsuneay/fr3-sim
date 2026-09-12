@@ -16,12 +16,13 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
-from fr3_dual_bolt_cell.model import (SIDES, build_model, controllers, manager_model,
+from fr3_dual_bolt_cell.model import (SIDES, build_model, manager_model,
     moveit_config, read_yaml)
 from fr3_dual_bolt_cell.world import load_scene, world_xml
 from fr3_bolt_inspection_cell.model import augment, inspection_world
 from fr3_bolt_inspection_cell.model import linked_controllers as controllers
 from fr3_bolt_inspection_cell.core import validate
+from fr3_bolt_inspection_cell.geometry import fingertip_geometry
 
 
 def start(context):
@@ -62,6 +63,10 @@ def start(context):
             raise FileNotFoundError(uri)
     xml = ET.tostring(root, encoding='unicode')
     (run/'robot.urdf').write_text(xml, encoding='utf-8')
+    geometry_file = run/'fingertip_geometry.yaml'
+    resolve_mesh = lambda uri: share/uri.removeprefix('package://fr3_dual_bolt_cell/')
+    geometry_file.write_text(yaml.safe_dump({side: fingertip_geometry(root, side, resolve_mesh)
+                                             for side in SIDES}), encoding='utf-8')
     description = {'robot_description': ParameterValue(xml, value_type=str), 'use_sim_time': sim}
     moveit = {**description, **moveit_config(root, arms, share),
               'allow_trajectory_execution': execute,
@@ -97,6 +102,7 @@ def start(context):
 
     task = Node(package='fr3_bolt_inspection_cell', executable='inspection_task',
                 parameters=[{'config_file': str(cfg_path), 'arms_file': arg('arms'),
+                             'fingertip_geometry_file': str(geometry_file),
                              'mode': mode, 'enable_execution': execute, 'use_sim_time': sim}],
                 output='screen')
     panel = Node(package='fr3_bolt_inspection_cell', executable='inspection_panel',

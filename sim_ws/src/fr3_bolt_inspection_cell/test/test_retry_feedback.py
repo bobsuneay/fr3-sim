@@ -113,6 +113,10 @@ def task(monkeypatch):
     node.io, node.status_pub = MagicMock(), MagicMock()
     node.cloud, node.object_state = object(), object()
     node.get_logger = MagicMock()
+    node.fingertips = {side: [dict(joint=f'{side}_{finger}_finger_joint',
+        vertices_tcp=[[0, 0, -.0023]], axis_tcp=[1, 0, 0])
+        for finger in ('left', 'right')] for side in ('left', 'right')}
+    node.check_fingertip_clearance = MagicMock()
     node.get_parameter = lambda name: NS(value='gazebo' if name == 'mode' else True)
     class Thread:
         def __init__(self, target, kwargs, daemon):
@@ -181,26 +185,97 @@ def test_randomize_object_moves_within_disk_and_clears_old_detection(task):
     node.cfg = dict(random_position_center=[.5, -.2], random_position_radius=.05,
                     table_z=.72, head_radius=.006)
     node.io.grasp_owner.return_value = ''
+    node.io.relocate_object.side_effect = lambda value: value.copy()
     result = node.randomize_object(None, response())
     assert result.success
+    assert node.phase == 'RANDOMIZING'
+    # Returning from the service must not wait for another ROS service callback.
+    node.io.grasp_owner.assert_not_called()
+    node.io.relocate_object.assert_not_called()
+    state = json.loads(node.status(None, response()).message)
+    assert state['busy'] and not state['can_start'] and not state['can_retry']
+    assert not state['can_randomize']
+    assert not node.start(None, response()).success
+    assert not node.randomize_object(None, response()).success
+    node.worker.target(**node.worker.kwargs)
+    node.worker.alive = False
     world_object = node.io.relocate_object.call_args.args[0]
     assert np.linalg.norm(world_object[:2, 3]-[.5, -.2]) <= .05
     assert world_object[2, 3] == pytest.approx(.7265)
     assert node.cloud is node.object_state is node.pick_target is None
     assert not node.stop_event.is_set()
+    assert node.phase == 'FAILED'  # Preserve the original pick-retry opportunity.
+    state = json.loads(node.status(None, response()).message)
+    assert not state['busy'] and state['can_retry'] and state['can_randomize']
+    assert 'randomized and verified' in state['detail']
 
 
-@pytest.mark.parametrize('busy,secured,owner', [(True, False, ''),
-                                                (False, True, ''),
-                                                (False, False, 'right')])
-def test_randomize_rejects_busy_secured_or_owned_object(task, busy, secured, owner):
+@pytest.mark.parametrize('busy,secured', [(True, False), (False, True)])
+def test_randomize_rejects_busy_or_secured_object(task, busy, secured):
     _, node = task
     node.worker = NS(is_alive=lambda: busy)
     node.pick_secured = secured
-    node.io.grasp_owner.return_value = owner
     result = node.randomize_object(None, response())
     assert not result.success
     node.io.relocate_object.assert_not_called()
+
+
+@pytest.mark.parametrize('owners', [['right'], ['', 'right']])
+def test_randomize_worker_refuses_owned_object_before_and_after_wait(task, owners):
+    _, node = task
+    node.output = None
+    node.io.grasp_owner.side_effect = owners
+    assert node.randomize_object(None, response()).success
+    node.worker.target(**node.worker.kwargs)
+    node.worker.alive = False
+    node.io.relocate_object.assert_not_called()
+    assert node.phase == 'FAILED'
+    assert 'position unchanged' in node.report['events'][-1]['detail']
+
+
+def test_randomize_verification_failure_is_reported_and_invalidates_old_pose(task):
+    _, node = task
+    node.phase, node.output = 'IDLE', None
+    node.cfg = dict(random_position_center=[.5, -.2], random_position_radius=.05,
+                    table_z=.72, head_radius=.006)
+    node.io.grasp_owner.return_value = ''
+    node.io.relocate_object.side_effect = TimeoutError('No position confirmation')
+    assert node.randomize_object(None, response()).success
+    node.worker.target(**node.worker.kwargs)
+    node.worker.alive = False
+    assert node.cloud is node.object_state is node.pick_target is None
+    state = json.loads(node.status(None, response()).message)
+    assert state['phase'] == 'FAILED' and not state['busy']
+    assert 'Randomization failed: No position confirmation' in state['detail']
+
+
+def test_randomize_success_restores_start_and_reports_verified_position(task):
+    _, node = task
+    node.phase, node.output = 'IDLE', None
+    node.cfg = dict(random_position_center=[.5, -.2], random_position_radius=.05,
+                    table_z=.72, head_radius=.006)
+    node.io.grasp_owner.return_value = ''
+    actual = np.eye(4)
+    actual[:2, 3] = [.501, -.201]
+    node.io.relocate_object.return_value = actual
+    assert node.randomize_object(None, response()).success
+    node.worker.target(**node.worker.kwargs)
+    node.worker.alive = False
+    state = json.loads(node.status(None, response()).message)
+    assert state['phase'] == 'IDLE' and state['can_start']
+    assert 'x=0.5010, y=-0.2010' in state['detail']
+
+
+def test_randomize_stop_before_worker_runs_does_not_move_object(task):
+    _, node = task
+    node.output = None
+    assert node.randomize_object(None, response()).success
+    assert node.stop(None, response()).success
+    node.io.check.side_effect = RuntimeError('Stop requested')
+    node.worker.target(**node.worker.kwargs)
+    node.worker.alive = False
+    node.io.relocate_object.assert_not_called()
+    assert node.phase == 'STOPPED'
 
 
 def test_retry_runs_new_camera_and_detection_after_recovery(task, monkeypatch, tmp_path):
@@ -268,7 +343,8 @@ def test_pick_is_confirmed_only_after_object_follows_test_lift(task):
     node.report = {'events': [], 'views': []}
     node.cfg = dict(max_grasp_attempts=5, grasp_offset=.01, grasp_depth_offset=.002,
                     open_width=.035, close_width=.004, approach_height=.05,
-                    descent_speed=.008, grasp_test_lift=.015)
+                    descent_speed=.008, grasp_test_lift=.015,
+                    table_z=.720, fingertip_table_clearance=.005)
     obj = np.eye(4)
     obj[:3, 3] = [.5, -.2, .724]
     node.perceive = MagicMock(return_value=NS(pose=obj))
@@ -295,7 +371,8 @@ def test_failed_test_lift_keeps_safety_latch_until_cleanup(task):
     node.report = {'events': [], 'views': []}
     node.cfg = dict(max_grasp_attempts=5, grasp_offset=.01, grasp_depth_offset=.002,
                     open_width=.035, close_width=.004, approach_height=.05,
-                    descent_speed=.008, grasp_test_lift=.015)
+                    descent_speed=.008, grasp_test_lift=.015,
+                    table_z=.720, fingertip_table_clearance=.005)
     obj = np.eye(4)
     obj[:3, 3] = [.5, -.2, .724]
     node.perceive = MagicMock(return_value=NS(pose=obj))
@@ -321,5 +398,8 @@ def test_failed_pick_cleanup_releases_attachment_before_opening(task):
     node.settle = MagicMock()
     node.reset_failed_pick('right')
     node.io.assisted_grasp.assert_called_once_with('right', False)
-    node.io.object_scene.assert_called_once_with(actual, previous='right')
+    from fr3_bolt_inspection_cell.core import transform
+    assert np.allclose(node.io.object_scene.call_args.args[0],
+                       actual @ transform([0, 0, 0], [0, -np.pi/2, 0]))
+    assert node.io.object_scene.call_args.kwargs == {'previous': 'right'}
     assert not node.pick_secured

@@ -3,6 +3,7 @@
 #include <gazebo/gazebo.hh>
 #include <gazebo/physics/physics.hh>
 #include <gazebo_ros/node.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <array>
@@ -27,10 +28,13 @@ class AssistedGrasp : public gazebo::WorldPlugin {
   gazebo::physics::JointPtr grasp_;
   std::array<rclcpp::Service<SetBool>::SharedPtr, 2> services_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr status_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr fingers_;
+  double last_finger_sample_ = -1.0;
   std::mutex mutex_;
   std::condition_variable cv_;
   std::shared_ptr<Pending> pending_;
   std::string robot_, object_, owner_;
+  double length_, shaft_radius_, head_length_;
 
  public:
   void Load(gazebo::physics::WorldPtr world, sdf::ElementPtr sdf) override {
@@ -38,6 +42,12 @@ class AssistedGrasp : public gazebo::WorldPlugin {
     node_ = gazebo_ros::Node::Get(sdf);
     robot_ = sdf->Get<std::string>("robot_model");
     object_ = sdf->Get<std::string>("object_model");
+    length_ = sdf->Get<double>("bolt_length");
+    shaft_radius_ = sdf->Get<double>("shaft_radius");
+    head_length_ = sdf->Get<double>("head_length");
+    if (!(length_ > head_length_ && head_length_ > 0 && shaft_radius_ > 0))
+      throw std::runtime_error("Invalid assisted grasp bolt dimensions");
+    fingers_ = node_->create_publisher<sensor_msgs::msg::JointState>("gripper_states", 10);
     for (size_t i = 0; i < 2; ++i) {
       const std::string side = i == 0 ? "left" : "right";
       services_[i] = node_->create_service<SetBool>(side+"_grasp",
@@ -65,6 +75,34 @@ class AssistedGrasp : public gazebo::WorldPlugin {
   }
 
  private:
+  void PublishFingers() {
+    const auto stamp = world_->SimTime();
+    const double now = stamp.Double();
+    if (last_finger_sample_ >= 0 && now >= last_finger_sample_ &&
+        now-last_finger_sample_ < 1.0/30.0) return;
+    last_finger_sample_ = now;
+    auto robot = world_->ModelByName(robot_);
+    if (!robot) return;  // The world plugin loads before spawn_entity finishes.
+    sensor_msgs::msg::JointState state;
+    state.header.stamp.sec = stamp.sec;
+    state.header.stamp.nanosec = stamp.nsec;
+    for (const auto & side : {std::string("left"), std::string("right")}) {
+      for (const auto & finger : {std::string("left"), std::string("right")}) {
+        const auto name = side+"_"+finger+"_finger_joint";
+        auto joint = robot->GetJoint(name);
+        if (!joint) continue;
+        const double position = joint->Position(0);
+        if (!std::isfinite(position)) continue;
+        state.name.push_back(name);
+        state.position.push_back(position);
+        state.velocity.push_back(joint->GetVelocity(0));
+      }
+    }
+    // This is actual Gazebo physics state, independent of mimic interface
+    // aliases. Missing joints are omitted and expire at the consumers.
+    if (!state.name.empty()) fingers_->publish(state);
+  }
+
   bool ReceiverReady(const std::string & side, gazebo::physics::ModelPtr robot,
                      gazebo::physics::LinkPtr bolt, gazebo::physics::LinkPtr palm) {
     const auto rel = palm->WorldPose().Inverse() * bolt->WorldPose();
@@ -72,17 +110,24 @@ class AssistedGrasp : public gazebo::WorldPlugin {
     // Bolt axis must run along local palm Y; both jaws surround shaft, not head.
     if (std::abs(axis.Y()) < .97) return false;
     const double t = -rel.Pos().Y()/axis.Y();
-    if (t < -.014 || t > .010) return false;  // 35 mm bolt, keep both jaws on its shaft
+    if (t < -length_/2+.0035 || t > length_/2-head_length_-.0015) return false;
     const auto point = rel.Pos()+axis*t;
-    if (std::abs(point.Z()-.149) > .003 || std::abs(point.X()) > .0018) return false;
+    // Original HKV mesh tip is palm Z=.1467 m.
+    // Require the configured shaft to overlap the physical tip region.
+    if (std::abs(point.Z()-.1467) > shaft_radius_ || std::abs(point.X()) > .0018) return false;
     auto left = robot->GetJoint(side+"_left_finger_joint");
     auto right = robot->GetJoint(side+"_right_finger_joint");
     if (!left || !right) return false;
     const double a = left->Position(0), b = right->Position(0);
-    return a >= 0 && b >= 0 && a <= .0035 && b <= .0035 &&
+    // Contact can stop the sliders before the 2 mm commanded position.
+    // Inner pad gap = a+b-2.1 mm; allow 1.5 mm contact tolerance per jaw.
+    const double contact_limit = shaft_radius_+.00105+.0015;
+    return a >= 0 && b >= 0 && a <= contact_limit && b <= contact_limit &&
+           std::abs(a-b) <= .001 &&
            std::abs((b-a)/2-point.X()) < .0018;
   }
   void Update() {
+    PublishFingers();
     std::lock_guard<std::mutex> lock(mutex_);
     if (!pending_ || pending_->expired) return;
     auto p = pending_;

@@ -9,7 +9,7 @@
   <depend>gazebo_ros</depend><depend>rclcpp</depend><depend>std_srvs</depend>
   <depend>gazebo_dev</depend>
   <exec_depend>fr3_dual_bolt_cell</exec_depend><exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs_py</exec_depend><exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend><depend>sensor_msgs</depend>
   <exec_depend>std_msgs</exec_depend><exec_depend>geometry_msgs</exec_depend>
   <exec_depend>moveit_msgs</exec_depend><exec_depend>shape_msgs</exec_depend>
   <exec_depend>control_msgs</exec_depend><exec_depend>trajectory_msgs</exec_depend>
