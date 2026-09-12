@@ -190,6 +190,27 @@ def test_grasp_config_remains_valid():
     assert c['close_width'] < .005 < c['open_width']
 
 
+def test_sim_uses_contact_system_and_preserves_single_command():
+    root, _ = robot('gazebo')
+    hardware = root.find('ros2_control/hardware')
+    assert hardware.find('plugin').text == 'fr3_bolt_inspection_cell/ContactSystem'
+    assert float(hardware.find("param[@name='finger_max_force']").text) == 4
+    assert float(hardware.find("param[@name='finger_max_speed']").text) == .006
+    plugin = ET.parse(SHARE/'contact_system_plugins.xml').getroot().find('class')
+    assert plugin.get('name') == hardware.find('plugin').text
+    mock, _ = robot('mock')
+    assert all(h.find('plugin').text != plugin.get('name') for h in mock.findall('ros2_control/hardware'))
+
+
+@pytest.mark.parametrize('key,value', [('finger_max_force', 0), ('finger_max_force', 11),
+    ('finger_max_speed', 0), ('finger_max_speed', .1)])
+def test_reject_unsafe_finger_drive_config(key, value):
+    c = config()
+    c[key] = value
+    with pytest.raises(ValueError, match='finger force'):
+        validate(c)
+
+
 def test_rest_to_rest_timing_bounds():
     q = np.array([[0, 0], [.03, .01], [.035, .04]])
     xyz = np.array([[0, 0, 0], [.01, 0, 0], [.02, 0, 0]])

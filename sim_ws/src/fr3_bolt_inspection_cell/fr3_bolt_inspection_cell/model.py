@@ -225,6 +225,10 @@ def augment(root, cfg, sim):
             raise ValueError('Expected one Gazebo ros2_control system per arm')
         combined = systems[0]
         combined.set('name', 'inspection_gazebo_system')
+        hardware = combined.find('hardware')
+        hardware.find('plugin').text = 'fr3_bolt_inspection_cell/ContactSystem'
+        for key in ('finger_max_force', 'finger_max_speed'):
+            element(hardware, 'param', name=key).text = str(cfg[key])
         for joint in systems[1].findall('joint'):
             combined.append(joint)
         root.remove(systems[1])

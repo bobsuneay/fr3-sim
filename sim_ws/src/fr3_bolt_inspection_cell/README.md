@@ -37,6 +37,12 @@ Humble Gazebo 将从动指状态接口导出为 `*_right_finger_joint_mimic/posi
 
 仿真中四个夹指的实际位置由 Gazebo 插件以 30 Hz 发布到 `/inspection/sim/gripper_states`，任务和界面读取该反馈，避免将 `_mimic` 接口名送入 MoveIt，也不使用主动指位置代替从动指反馈。随机位置按钮在后台执行，界面显示 `RANDOMIZING`；只有读取到零件实际新位姿并核对后才算成功。
 
+Gazebo 夹爪使用本包 `ContactSystem` 硬件插件：机械臂仍由原 GazeboSystem 控制，两个夹指从原插件的控制列表中移出。每只夹爪只接收一个开度目标；两个物理指由同一目标和同步反馈产生驱动力，以物理步频运行。只在生成模型时初始化位置，运动中不再调用 `SetPosition`。默认 `finger_max_force: 4.0` 限制每指驱动力为 4 N，`finger_max_speed: 0.006` 限制目标变化率为 6 mm/s（不是实际速度硬限制）。碰到零件时有限驱动力允许夹指停住，而不是强行达到空夹位置。该模型使用有限刚度模拟联动，偏差超过 1 mm 仍会中止；实机和 mock 后端不使用此仿真插件。
+
+辅助夹持要求两指均在最近 0.15 秒仿真时间内接触到螺丝，且接触穿透深度不超过 1.5 mm；开度和杆部位置也必须符合几何校验。空夹、只有单指接触或明显穿透时不建立固定关节。日志 `Grasp check ... finger contact age` 显示两指接触距当前的时间；缺少接触会报 `Missing recent bolt contact on BOTH fingers`，随后按原流程清理、重试。固定关节辅助和试抬仍不能代替实机摩擦/力反馈验证。
+
+更新此修复后必须重新编译 C++ 插件并完全退出旧 Gazebo 再启动：`colcon build --packages-select fr3_bolt_inspection_cell --symlink-install`，然后 `source install/setup.bash`。确认启动日志出现 `CONTACT GRIPPER: one target per pair`；否则新硬件插件没有加载。可用 `colcon test --packages-select fr3_bolt_inspection_cell` 运行包含驱动力上限、联动与接触证据的测试。还需在 Gazebo 实测空夹、桌上双指接触、试抬、交接和停止；当前 Windows 离线测试没有覆盖完整 ROS/Gazebo 插件加载。
+
 本包保留原始 HKV 夹爪的视觉外形，但采用与 `fr3_dual_bolt_cell` 一致的稳定简化碰撞代理：法兰、主体、滑轨和手指滑块使用盒体，只有左右两根手指末端保留 `finger.stl` 形状碰撞。这样既保留真实指尖夹持轮廓，也避免完整 CAD 网格在法兰安装处产生数值抖动。演示螺丝已放大为总长 **45 mm**、杆径 **12 mm**、头部直径 **18 mm**、头长 **8 mm**。点云筛选和辅助夹持校验读取配置尺寸，质量与惯量由场景生成器重算；指尖离桌面仍为 5 mm。实际两手夹持的可达性和夹持空间仍需在仿真中重新确认。
 
 为避免原始 CAD 网格之间的微小接触让 Gazebo 夹爪数值振荡，两个活动手指在仿真中关闭 `selfCollide`，使用较低刚度、较高阻尼的接触参数，并将关节阻尼/摩擦提高到 `15.0/0.40`；这只影响仿真手指的数值稳定性，不改变视觉网格、MoveIt 碰撞网格或夹持服务的几何门限。每次夹爪动作结束后，任务节点会记录目标开口和两个实际关节位置。

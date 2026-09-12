@@ -33,6 +33,8 @@ def validate(cfg):
         elif isinstance(value, (int, float)) and not math.isfinite(value):
             raise ValueError('Configuration contains non-finite numbers')
     finite(cfg)
+    if not 0 < cfg['finger_max_force'] <= 10 or not 0 < cfg['finger_max_speed'] <= .02:
+        raise ValueError('Require finger force in (0, 10] N and speed in (0, .02] m/s')
     if cfg['first_arm'] not in ('left', 'right'):
         raise ValueError('first_arm must be left or right')
     for key in ('roi_min', 'roi_max', 'inspection_center', 'handover_center'):

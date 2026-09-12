@@ -1,0 +1,5 @@
+<library path="fr3_inspection_contact_system">
+  <class name="fr3_bolt_inspection_cell/ContactSystem" type="fr3_inspection::ContactSystem" base_class_type="gazebo_ros2_control::GazeboSystemInterface">
+    <description>Standard arm control with bounded-force, single-target linked fingers.</description>
+  </class>
+</library>

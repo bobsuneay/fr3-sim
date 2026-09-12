@@ -2,6 +2,7 @@
 // A single fixed joint owns the bolt. Transfer validates the receiver first.
 #include <gazebo/gazebo.hh>
 #include <gazebo/physics/physics.hh>
+#include <gazebo/physics/ContactManager.hh>
 #include <gazebo_ros/node.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_srvs/srv/set_bool.hpp>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <stdexcept>
+#include "contact_evidence.hpp"
 
 namespace fr3_inspection {
 class AssistedGrasp : public gazebo::WorldPlugin {
@@ -25,6 +27,8 @@ class AssistedGrasp : public gazebo::WorldPlugin {
   gazebo::physics::WorldPtr world_;
   gazebo_ros::Node::SharedPtr node_;
   gazebo::event::ConnectionPtr update_;
+  gazebo::event::ConnectionPtr contact_update_;
+  std::array<ContactEvidence, 2> contacts_;
   gazebo::physics::JointPtr grasp_;
   std::array<rclcpp::Service<SetBool>::SharedPtr, 2> services_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr status_;
@@ -39,6 +43,7 @@ class AssistedGrasp : public gazebo::WorldPlugin {
  public:
   void Load(gazebo::physics::WorldPtr world, sdf::ElementPtr sdf) override {
     world_ = world;
+    world_->Physics()->GetContactManager()->SetNeverDropContacts(true);
     node_ = gazebo_ros::Node::Get(sdf);
     robot_ = sdf->Get<std::string>("robot_model");
     object_ = sdf->Get<std::string>("object_model");
@@ -71,10 +76,37 @@ class AssistedGrasp : public gazebo::WorldPlugin {
       });
     update_ = gazebo::event::Events::ConnectWorldUpdateBegin(
       [this](const gazebo::common::UpdateInfo &) { Update(); });
-    RCLCPP_WARN(node_->get_logger(), "ASSISTED SIMULATION GRASP: geometry gate + fixed joint; no force validation");
+    contact_update_ = gazebo::event::Events::ConnectWorldUpdateEnd([this]() { SampleContacts(); });
+    RCLCPP_WARN(node_->get_logger(), "ASSISTED SIMULATION GRASP: bilateral contact + geometry gate + fixed joint; not a friction validation");
   }
 
  private:
+  void SampleContacts() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double now = world_->SimTime().Double();
+    auto robot = world_->ModelByName(robot_);
+    auto object = world_->ModelByName(object_);
+    if (!robot || !object) return;
+    const auto bolt = object->GetLink("body");
+    std::array<std::array<double, 2>, 2> depths{{{{-1, -1}}, {{-1, -1}}}};
+    auto manager = world_->Physics()->GetContactManager();
+    for (unsigned int i=0; i<manager->GetContactCount(); ++i) {
+      const auto contact = manager->GetContact(i);
+      if (!contact || !contact->collision1 || !contact->collision2 || !contact->count) continue;
+      auto a = contact->collision1->GetLink(), b = contact->collision2->GetLink();
+      auto other = a == bolt ? b : (b == bolt ? a : gazebo::physics::LinkPtr());
+      if (!other) continue;
+      double depth = 0;
+      for (unsigned int k=0; k<contact->count; ++k) depth = std::max(depth, contact->depths[k]);
+      for (size_t s=0; s<2; ++s) for (size_t f=0; f<2; ++f) {
+        const std::string name = std::string(s == 0 ? "left" : "right")+
+          (f == 0 ? "_left_finger" : "_right_finger");
+        if (other != robot->GetLink(name)) continue;
+        depths[s][f] = std::max(depths[s][f], depth);
+      }
+    }
+    for (size_t s=0; s<2; ++s) contacts_[s].sample(now, depths[s]);
+  }
   void PublishFingers() {
     const auto stamp = world_->SimTime();
     const double now = stamp.Double();
@@ -139,6 +171,13 @@ class AssistedGrasp : public gazebo::WorldPlugin {
       auto bolt = object->GetLink("body");
       if (!palm || !bolt) throw std::runtime_error("Required physical link missing");
       if (p->close) {
+        const size_t index = p->side == "left" ? 0 : 1;
+        const double now = world_->SimTime().Double();
+        const auto &contact = contacts_[index].seen;
+        RCLCPP_INFO(node_->get_logger(), "Grasp check %s: finger contact age=(%.3f, %.3f) s",
+          p->side.c_str(), now-contact[0], now-contact[1]);
+        if (!contacts_[index].ready(now))
+          throw std::runtime_error("Missing recent bolt contact on BOTH fingers; no attachment (check alignment/collision)");
         if (!ReceiverReady(p->side, robot, bolt, palm))
           throw std::runtime_error("Jaws do not enclose the expected shaft region");
         if (owner_ != p->side) {

@@ -19,6 +19,9 @@ grasp_offset: 0.010
 fingertip_table_clearance: 0.005
 open_width: 0.035
 close_width: 0.004
+# Gazebo only: each physical finger is driven by bounded force, never teleported.
+finger_max_force: 4.0
+finger_max_speed: 0.006
 approach_height: 0.05
 # Before closing: measured TCP reach, then at most one complete correction.
 grasp_reach_tolerance: 0.001
