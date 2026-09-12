@@ -121,6 +121,8 @@ def task(monkeypatch):
     node = module.Inspection.__new__(module.Inspection)
     node.run_lock, node.data_lock, node.stop_event = threading.Lock(), threading.Lock(), threading.Event()
     node.phase, node.pick_secured, node.pick_target = 'FAILED', False, np.eye(4)
+    node.handover_context = None
+    node.handover_requested = threading.Event()
     node.worker, node.output = None, Path('previous_run')
     node.report = {'events': [{'phase': 'FAILED', 'detail': 'old'}], 'views': ['old']}
     node.io, node.status_pub = MagicMock(), MagicMock()
@@ -133,7 +135,7 @@ def task(monkeypatch):
     node.check_fingertip_clearance = MagicMock()
     node.get_parameter = lambda name: NS(value='gazebo' if name == 'mode' else True)
     class Thread:
-        def __init__(self, target, kwargs, daemon):
+        def __init__(self, target, kwargs=None, daemon=True):
             self.target, self.kwargs, self.alive = target, kwargs, False
         def start(self):
             self.alive = True
@@ -145,6 +147,51 @@ def task(monkeypatch):
 
 def response():
     return NS(success=False, message='')
+
+
+def test_handover_during_scan_queues_without_parallel_motion(task):
+    _, node = task
+    node.phase = 'INSPECT_RIGHT'
+    node.handover_context = ('right', 'left', np.eye(4), np.eye(4), np.eye(4))
+    worker = NS(is_alive=lambda: True)
+    node.worker = worker
+    assert node.skip_to_handover(None, response()).success
+    assert node.handover_requested.is_set()
+    assert node.worker is worker
+    assert not node.skip_to_handover(None, response()).success
+    node.io.cancel.assert_not_called()
+    node.io.global_move.assert_not_called()
+
+
+@pytest.mark.parametrize('phase', ['GRASP', 'HANDOVER_CONFIRM', 'INSPECT_LEFT', 'DONE_HOLDING_LEFT'])
+def test_handover_rejects_other_stages(task, phase):
+    _, node = task
+    node.phase = phase
+    node.handover_context = ('right', 'left', np.eye(4), np.eye(4), np.eye(4))
+    assert not node.skip_to_handover(None, response()).success
+
+
+def test_resume_handover_checks_owner_before_moving(task):
+    _, node = task
+    node.output = None
+    node.handover_context = ('right', 'left', np.eye(4), np.eye(4), np.eye(4))
+    assert node.skip_to_handover(None, response()).success
+    node.worker.target()
+    node.io.wait_stationary.assert_called_once()
+    node.io.global_move.assert_not_called()
+    node.io.gripper.assert_not_called()
+    assert node.phase == 'FAILED'
+    assert 'ownership' in node.report['events'][-1]['detail']
+    assert not node.handover_requested.is_set()
+
+
+def test_skip_scan_bypasses_minimum_views_without_any_motion(task):
+    _, node = task
+    node.output = None
+    node.cfg = dict(views_deg=[[0, 0, 0]], minimum_views=3)
+    node.handover_requested.set()
+    node.scan('right', np.eye(4), np.eye(4))
+    node.io.cartesian.assert_not_called()
 
 
 def test_humble_mimic_feedback_preserves_measured_values_and_age(task):

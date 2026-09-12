@@ -33,6 +33,11 @@ def validate(cfg):
         elif isinstance(value, (int, float)) and not math.isfinite(value):
             raise ValueError('Configuration contains non-finite numbers')
     finite(cfg)
+    for key, fallback in (('scan_joint_speed', 'joint_speed'),
+                          ('scan_joint_acceleration', 'joint_acceleration')):
+        cfg.setdefault(key, cfg[fallback])
+        if cfg[key] <= 0:
+            raise ValueError(key+' must be positive')
     if not 0 < cfg['finger_max_force'] <= 10 or not 0 < cfg['finger_max_speed'] <= .02:
         raise ValueError('Require finger force in (0, 10] N and speed in (0, .02] m/s')
     if not 0 < cfg['retry_lift_height'] <= .05:

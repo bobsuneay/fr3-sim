@@ -54,6 +54,8 @@ class Inspection(Node):
         self.phase = 'IDLE'
         self.pick_secured = False
         self.pick_target = None
+        self.handover_context = None
+        self.handover_requested = threading.Event()
         self.report = {'backend': 'gazebo_assisted', 'events': [], 'views': []}
         self.output = None
         self.tf_buffer = Buffer()
@@ -77,6 +79,7 @@ class Inspection(Node):
         self.io = IO(self)
         self.create_service(Trigger, '/inspection/start', self.start)
         self.create_service(Trigger, '/inspection/retry_pick', self.retry_pick)
+        self.create_service(Trigger, '/inspection/skip_to_handover', self.skip_to_handover)
         self.create_service(Trigger, '/inspection/randomize_object', self.randomize_object)
         self.create_service(Trigger, '/inspection/stop', self.stop)
         self.create_service(Trigger, '/inspection/get_status', self.status)
@@ -133,6 +136,40 @@ class Inspection(Node):
     def retry_pick(self, req, res):
         return self.start_run(res, retry=True)
 
+    def can_handover(self):
+        busy = self.worker is not None and self.worker.is_alive()
+        return (self.get_parameter('mode').value == 'gazebo'
+                and self.get_parameter('enable_execution').value
+                and self.handover_context is not None
+                and not self.handover_requested.is_set()
+                and ((busy and self.phase == 'INSPECT_RIGHT')
+                     or (not busy and self.phase in ('FAILED', 'STOPPED'))))
+
+    def skip_to_handover(self, req, res):
+        with self.run_lock:
+            if not self.can_handover():
+                res.message = 'Available during right-arm inspection or after it stops with a retained grasp'
+                return res
+            self.handover_requested.set()
+            if self.worker is not None and self.worker.is_alive():
+                res.success, res.message = True, 'Queued: finish current motion, then hand over to left arm'
+            else:
+                self.stop_event.clear()
+                self.worker = threading.Thread(target=self.resume_handover, daemon=True)
+                self.worker.start()
+                res.success, res.message = True, 'Checking retained right grasp before left-arm handover'
+            return res
+
+    def resume_handover(self):
+        try:
+            self.io.wait_stationary()
+            self.finish_handover(*self.handover_context)
+        except Exception as exc:
+            self.io.cancel()
+            self.publish('STOPPED' if self.stop_event.is_set() else 'FAILED', str(exc))
+        finally:
+            self.handover_requested.clear()
+
     def start_run(self, res, retry):
         with self.run_lock:
             if self.worker is not None and self.worker.is_alive():
@@ -146,6 +183,8 @@ class Inspection(Node):
                 res.message = 'Require mode:=gazebo enable_execution:=true; mock is model preview only'
                 return res
             self.stop_event.clear()
+            self.handover_context = None
+            self.handover_requested.clear()
             previous = str(self.output) if self.output else None
             self.output = None
             self.report = {'backend': 'gazebo_assisted', 'events': [], 'views': [],
@@ -223,6 +262,7 @@ class Inspection(Node):
             enabled = (self.get_parameter('mode').value == 'gazebo'
                        and self.get_parameter('enable_execution').value)
             event.update(busy=busy, can_start=bool(enabled and not busy and self.phase == 'IDLE'),
+                         can_handover=bool(self.can_handover()),
                          can_retry=bool(enabled and not busy and not self.pick_secured
                                         and self.phase in ('FAILED', 'STOPPED')),
                          can_randomize=bool(self.get_parameter('mode').value == 'gazebo'
@@ -360,12 +400,18 @@ class Inspection(Node):
         completed = 0
         for index, (obj, _) in enumerate(centered_views(neutral[:3, 3], neutral[:3, :3],
                                                        object_tcp, self.cfg['views_deg'])):
+            if side == 'right' and self.handover_requested.is_set():
+                self.get_logger().info('Operator requested left handover; skipping remaining right views')
+                return
             entry = {'arm': side, 'index': index, 'angles_deg': self.cfg['views_deg'][index]}
             waypoints = interpolate_object(neutral, obj, object_tcp, self.cfg['cartesian_step'])
             try:
                 if index != 0:
                     self.io.cartesian(side, waypoints, self.cfg['scan_speed'], object_tcp, neutral[:3, 3])
             except PlanningFailure as exc:
+                self.get_logger().warning(
+                    f'Inspection view skipped: arm={side}, index={index}, '
+                    f'angles_deg={self.cfg["views_deg"][index]}; {exc}')
                 entry.update(status='unreachable', reason=str(exc))
                 self.report['views'].append(entry)
                 self.save_report()
@@ -378,11 +424,15 @@ class Inspection(Node):
             self.report['views'].append(entry)
             self.save_report()
             completed += 1
+            if side == 'right' and self.handover_requested.is_set():
+                return
             if index != 0:
                 self.io.cartesian(side, interpolate_object(obj, neutral, object_tcp,
                     self.cfg['cartesian_step']), self.cfg['scan_speed'], object_tcp, neutral[:3, 3])
                 self.settle()
                 self.verify(neutral)
+        if side == 'right' and self.handover_requested.is_set():
+            return
         if completed < self.cfg['minimum_views']:
             raise RuntimeError(f'Only {completed} views reachable for {side}; requires {self.cfg["minimum_views"]}')
 
@@ -546,33 +596,56 @@ class Inspection(Node):
             self.io.global_move(first, neutral@donor_grasp)
             self.settle()
             self.verify(neutral)
+            if first == 'right':
+                self.handover_context = (first, second, neutral.copy(), donor_grasp.copy(), receiver_grasp.copy())
             self.scan(first, neutral, donor_grasp)
-            handover = neutral.copy()
-            handover[:3, 3] = self.cfg['handover_center']
-            self.io.cartesian(first, [handover@donor_grasp], self.cfg['transfer_speed'])
-            self.publish('HANDOVER_APPROACH', second+' approaching the free shaft region from below')
-            self.io.allow_touch([second+'_left_finger', second+'_right_finger'])
-            target = handover@receiver_grasp
-            pre = target.copy()
-            pre[:3, 3] -= target[:3, 2]*self.cfg['approach_height']
-            self.io.global_move(second, pre)
-            self.io.cartesian(second, [target], self.cfg['descent_speed'])
-            self.publish('HANDOVER_CONFIRM', 'Validate receiver before opening donor')
-            transfer(self.io, first, second, handover, self.cfg['close_width'],
-                     self.cfg['open_width'], self.settle, self.verify)
-            retreat = handover@donor_grasp
-            retreat[:3, 3] -= retreat[:3, 2]*self.cfg['approach_height']
-            self.io.cartesian(first, [retreat], self.cfg['transfer_speed'])
-            self.io.allow_touch([first+'_left_finger', first+'_right_finger'], False)
-            self.io.global_move(first, joints=self.arms[first]['initial'])
-            self.io.cartesian(second, [neutral@receiver_grasp], self.cfg['transfer_speed'])
-            self.scan(second, neutral, receiver_grasp)
-            skipped = sum(v['status'] == 'unreachable' for v in self.report['views'])
-            self.publish('DONE_HOLDING_'+second.upper(),
-                f'Both arms inspected; receiver retains part. Unreachable views: {skipped}. Results: {self.output}')
+            self.finish_handover(first, second, neutral, donor_grasp, receiver_grasp)
         except Exception as exc:
             self.io.cancel()
             self.publish('STOPPED' if self.stop_event.is_set() else 'FAILED', str(exc))
+        finally:
+            self.handover_requested.clear()
+
+    def finish_handover(self, first, second, neutral, donor_grasp, receiver_grasp):
+        self.io.check()
+        if self.handover_requested.is_set():
+            self.report['right_inspection_skipped_by_operator'] = True
+        self.publish('HANDOVER_PREPARE', 'Checking retained grasp and moving to handover pose')
+        if self.io.grasp_owner() != first:
+            raise RuntimeError('Donor ownership not confirmed; no handover motion sent')
+        # Recover the actual held pose, including a stopped scan mid-rotation.
+        # Keep the original grasp transform and refresh the scene before moving.
+        actual = self.io.truth()@np.linalg.inv(self.object_truth)
+        self.io.object_scene(actual, first)
+        handover = neutral.copy()
+        handover[:3, 3] = self.cfg['handover_center']
+        self.io.global_move(first, handover@donor_grasp)
+        self.settle()
+        self.verify(handover)
+        # Once receiver approach starts, this shortcut must not repeat a transfer.
+        self.handover_context = None
+        self.publish('HANDOVER_APPROACH', second+' approaching the free shaft region from below')
+        self.io.allow_touch([second+'_left_finger', second+'_right_finger'])
+        target = handover@receiver_grasp
+        pre = target.copy()
+        pre[:3, 3] -= target[:3, 2]*self.cfg['approach_height']
+        self.io.global_move(second, pre)
+        self.io.cartesian(second, [target], self.cfg['descent_speed'])
+        self.publish('HANDOVER_CONFIRM', 'Validate receiver before opening donor')
+        transfer(self.io, first, second, handover, self.cfg['close_width'],
+                 self.cfg['open_width'], self.settle, self.verify)
+        retreat = handover@donor_grasp
+        retreat[:3, 3] -= retreat[:3, 2]*self.cfg['approach_height']
+        self.io.cartesian(first, [retreat], self.cfg['transfer_speed'])
+        self.io.allow_touch([first+'_left_finger', first+'_right_finger'], False)
+        self.io.global_move(first, joints=self.arms[first]['initial'])
+        self.io.cartesian(second, [neutral@receiver_grasp], self.cfg['transfer_speed'])
+        self.scan(second, neutral, receiver_grasp)
+        skipped = sum(v['status'] == 'unreachable' for v in self.report['views'])
+        self.publish('DONE_HOLDING_'+second.upper(),
+            f'Handover and receiver inspection complete; receiver retains part. '
+            f'Right inspection manually skipped={self.report.get("right_inspection_skipped_by_operator", False)}. '
+            f'Unreachable views: {skipped}. Results: {self.output}')
 
 
 def main():

@@ -590,6 +590,29 @@ class IO:
                 f'Cartesian path incomplete ({response.fraction:.1%}); '
                 f'error_code={response.error_code.val}, points={len(points)}, '
                 f'max_joint_step={max_joint_step:.4f} rad; nothing executed')
+        if len(q) == 1:
+            # MoveIt can collapse a stationary request to one point. Check
+            # measured FK against EVERY waypoint: equal endpoints alone do
+            # not mean a requested rotation/loop has been performed.
+            actual = self.tcp_pose(side)
+            position_error = max(float(np.linalg.norm(t[:3, 3]-actual[:3, 3]))
+                                 for t in waypoints)
+            angle_error = max(float(Rotation.from_matrix(
+                t[:3, :3].T@actual[:3, :3]).magnitude()) for t in waypoints)
+            if position_error <= .0005 and angle_error <= .005:
+                if object_tcp is not None and center is not None:
+                    object_pose = actual@np.linalg.inv(object_tcp)
+                    if np.linalg.norm(object_pose[:3, 3]-center) > self.c['center_tolerance']:
+                        raise PlanningFailure('Stationary target exceeds object centre drift tolerance')
+                self.n.get_logger().info(
+                    f'Cartesian target already reached: side={side}, '
+                    f'position_error={position_error*1000:.3f} mm, '
+                    f'angle_error={angle_error:.5f} rad; no controller goal needed')
+                return
+            raise PlanningFailure(
+                f'Single-point Cartesian path did not reach requested waypoints: '
+                f'position_error={position_error*1000:.3f} mm, '
+                f'angle_error={angle_error:.5f} rad; nothing executed')
         if len(q) < 2 or max_joint_step > self.c['joint_step_limit']:
             raise PlanningFailure(
                 f'Empty path or joint discontinuity; points={len(points)}, '
@@ -605,8 +628,16 @@ class IO:
             object_poses = [t@np.linalg.inv(object_tcp) for t in frames]
             if max(np.linalg.norm(t[:3, 3]-center) for t in object_poses) > self.c['center_tolerance']:
                 raise PlanningFailure('Planned rotation exceeds object centre drift tolerance')
-        times = segment_times(q, [t[:3, 3] for t in frames], speed,
-                              self.c['joint_speed'], self.c['joint_acceleration'])
+        scanning = object_tcp is not None and center is not None
+        joint_speed = self.c.get('scan_joint_speed', self.c['joint_speed']) if scanning else self.c['joint_speed']
+        acceleration = (self.c.get('scan_joint_acceleration', self.c['joint_acceleration'])
+                        if scanning else self.c['joint_acceleration'])
+        times = segment_times(q, [t[:3, 3] for t in frames], speed, joint_speed, acceleration)
+        if scanning:
+            self.n.get_logger().info(
+                f'Inspection rotation timing: duration={times[-1]:.2f} s simulation time, '
+                f'TCP speed={speed:.3f} m/s, joint speed={joint_speed:.3f} rad/s, '
+                f'joint acceleration={acceleration:.3f} rad/s^2')
         for point, seconds in zip(trajectory.joint_trajectory.points, times):
             point.velocities = [0.0]*len(point.positions)
             point.accelerations = [0.0]*len(point.positions)

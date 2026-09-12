@@ -35,7 +35,9 @@ max_grasp_attempts: 5
 cartesian_step: 0.003
 descent_speed: 0.008
 transfer_speed: 0.025
-scan_speed: 0.015
+scan_speed: 0.030
+scan_joint_speed: 0.24
+scan_joint_acceleration: 0.60
 joint_speed: 0.12
 joint_acceleration: 0.15
 # Relaxed for the near-singular vertical pick; logs report the actual maximum.

@@ -90,12 +90,59 @@ def test_partial_cartesian_is_replaced_only_after_full_fallback(adapter):
     assert complete.joint_trajectory.points[-1].velocities == [0.0]
 
 
+def test_scan_speed_changes_only_centered_rotation(adapter):
+    _, io = adapter
+    io.c.update(scan_joint_speed=.24, scan_joint_acceleration=.60)
+    q = np.array([[0.0], [.1]])
+    normal, scan = trajectory(), trajectory()
+    io.run_cartesian_trajectory(normal, q, [np.eye(4)]*2, .03)
+    io.run_cartesian_trajectory(scan, q, [np.eye(4)]*2, .03, np.eye(4), np.zeros(3))
+    def seconds(t):
+        value = t.joint_trajectory.points[-1].time_from_start
+        start = t.joint_trajectory.points[0].time_from_start
+        return value.sec + value.nanosec*1e-9 - start.sec - start.nanosec*1e-9
+    assert seconds(scan) == pytest.approx(seconds(normal)/2, abs=1e-8)
+
+
 def test_fallback_failure_never_executes_partial_path(adapter):
     module, io = adapter
     io.call = lambda *args: NS(solution=trajectory(), error_code=NS(val=1), fraction=4/9)
     io.seeded_cartesian = MagicMock(side_effect=module.PlanningFailure('table contact'))
     with pytest.raises(module.PlanningFailure, match='table contact'):
         io.cartesian('right', [np.eye(4)], .008)
+    io.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('side', ['left', 'right'])
+def test_single_point_at_measured_target_needs_no_execution(adapter, side):
+    _, io = adapter
+    single = trajectory()
+    single.joint_trajectory.points = single.joint_trajectory.points[:1]
+    io.call = lambda *args: NS(solution=single, error_code=NS(val=1), fraction=1.0)
+    io.tcp_pose = MagicMock(return_value=np.eye(4))
+    io.cartesian(side, [np.eye(4)], .008, np.eye(4), np.zeros(3))
+    io.tcp_pose.assert_called_once_with(side)
+    io.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('failure', ['translation', 'rotation', 'loop', 'center', 'empty'])
+def test_stationary_path_cannot_hide_missing_motion_or_drift(adapter, failure):
+    module, io = adapter
+    single = trajectory()
+    single.joint_trajectory.points = single.joint_trajectory.points[:0 if failure == 'empty' else 1]
+    io.call = lambda *args: NS(solution=single, error_code=NS(val=1), fraction=1.0)
+    io.tcp_pose = MagicMock(return_value=np.eye(4))
+    target = np.eye(4)
+    center = np.zeros(3)
+    if failure in ('translation', 'loop'):
+        target[0, 3] = .01
+    if failure == 'rotation':
+        target[:3, :3] = module.Rotation.from_euler('x', .1).as_matrix()
+    if failure == 'center':
+        center[0] = .01
+    waypoints = [target, np.eye(4)] if failure == 'loop' else [target]
+    with pytest.raises(module.PlanningFailure):
+        io.cartesian('right', waypoints, .008, np.eye(4), center)
     io.execute.assert_not_called()
 
 

@@ -60,6 +60,7 @@ def main():
     clients = {name: node.create_client(Trigger, topic) for name, topic in (
         ('start', '/inspection/start'), ('retry', '/inspection/retry_pick'),
         ('randomize', '/inspection/randomize_object'),
+        ('handover', '/inspection/skip_to_handover'),
         ('stop', '/inspection/stop'), ('status', '/inspection/get_status'),
         ('owner', '/inspection/sim/owner'))}
     requests = {}
@@ -136,7 +137,7 @@ def main():
             poll('owner')
             last_poll = now
         for name, (future, sent) in list(requests.items()):
-            if name in ('start', 'retry', 'randomize', 'stop') and not future.done() and now-sent > 8:
+            if name in ('start', 'retry', 'randomize', 'handover', 'stop') and not future.done() and now-sent > 8:
                 # Abandon only the local response; a remote task may already be
                 # running. Read status and leave Stop available; never auto-resend.
                 future.cancel()
@@ -156,7 +157,7 @@ def main():
             controls['can_retry'] = controls['can_randomize'] = False
         ui.controls(controls, pending=any(
             not future.done() for name, (future, _) in requests.items()
-            if name in ('start', 'retry', 'randomize')))
+            if name in ('start', 'retry', 'randomize', 'handover')))
         event = latest['event']
         if event:
             ui.status.set(event['phase']+'\n'+event['detail']+('' if fresh else '\n任务状态连接中断/等待服务'))

@@ -20,6 +20,9 @@ class InspectionPanel:
         self.randomize = ttk.Button(bar, text='随机零件位置',
                                     command=lambda: request('randomize'), state='disabled')
         self.randomize.pack(side='left', padx=4)
+        self.handover = ttk.Button(bar, text='跳到左手交接',
+                                   command=lambda: request('handover'), state='disabled')
+        self.handover.pack(side='left', padx=4)
         ttk.Button(bar, text='停止运动并保持夹持', command=lambda: request('stop')).pack(side='left', padx=4)
         self.selected = tk.StringVar(value=cameras[0])
         ttk.Combobox(bar, textvariable=self.selected, values=cameras,
@@ -57,6 +60,7 @@ class InspectionPanel:
             self.grippers[side].set(gripper_text(side, joints, owner))
 
     def controls(self, state, pending=False):
+        self.handover.configure(state='normal' if state.get('can_handover') and not pending else 'disabled')
         self.start.configure(state='normal' if state.get('can_start') and not pending else 'disabled')
         self.retry.configure(state='normal' if state.get('can_retry') and not pending else 'disabled')
         self.randomize.configure(
