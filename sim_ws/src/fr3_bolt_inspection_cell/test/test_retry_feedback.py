@@ -150,6 +150,47 @@ def response():
     return NS(success=False, message='')
 
 
+@pytest.mark.parametrize('result', ['second', 'none', 'execution_error'])
+def test_perpendicular_candidates_preflight_before_any_motion(task, result):
+    module, node = task
+    from fr3_bolt_inspection_cell.handover import approach_receiver
+    from fr3_bolt_inspection_cell.core import grasp_in_object, perpendicular_receiver_grasp
+    donor = grasp_in_object(-.01)
+    receiver = perpendicular_receiver_grasp(.01, donor)
+    candidates = []
+    def plan(side, pre, target, plan_only):
+        assert plan_only
+        node.io.execute.assert_not_called()
+        assert abs(target[:3, 0]@donor[:3, 0]) < 1e-12
+        assert abs(target[:3, 2]@donor[:3, 2]) < 1e-12
+        assert np.linalg.norm(pre[:3, 3]-target[:3, 3]) == pytest.approx(.05)
+        candidates.append(target.copy())
+        if result == 'none' or len(candidates) == 1:
+            raise module.PlanningFailure('unreachable side')
+        return 'connection', 'prepared'
+    node.io.pick_approach.side_effect = plan
+    if result == 'execution_error':
+        node.io.execute.side_effect = RuntimeError('controller stopped')
+    def run():
+        return approach_receiver(node.io, 'left', np.eye(4), receiver, .05, .008, MagicMock())
+    if result == 'none':
+        with pytest.raises(module.PlanningFailure, match='All 4'):
+            run()
+        assert len(candidates) == 4
+        node.io.execute.assert_not_called()
+    elif result == 'execution_error':
+        with pytest.raises(RuntimeError, match='controller stopped'):
+            run()
+        assert len(candidates) == 2
+        node.io.execute_prepared_cartesian.assert_not_called()
+    else:
+        grasp, target = run()
+        assert np.allclose(target, candidates[1])
+        assert np.allclose(grasp, target)
+        assert np.dot(candidates[0][:3, 2], candidates[1][:3, 2]) == pytest.approx(-1)
+        node.io.execute_prepared_cartesian.assert_called_once_with('prepared', .008)
+
+
 @pytest.mark.parametrize('scale,expected', [(.25, .25), (1.5, 1.5), (2., 2.),
     (0, 1.), (-1., 1.), (2.01, 1.), (float('nan'), 1.), (float('inf'), 1.)])
 def test_scan_slider_bounds_and_status_readback(task, scale, expected):
@@ -221,6 +262,7 @@ def test_handover_requires_receiver_motion_follow_before_scan(task, monkeypatch,
     node.io.tcp_pose.return_value = target.copy()
     node.settle, node.scan = MagicMock(), MagicMock()
     monkeypatch.setattr(module, 'transfer', MagicMock())
+    monkeypatch.setattr(module, 'approach_receiver', MagicMock(return_value=(np.eye(4), target)))
     node.verify = MagicMock(side_effect=[0, 0 if follow_ok else RuntimeError('part did not follow')])
     if follow_ok:
         node.finish_handover('right', 'left', target, np.eye(4), np.eye(4))

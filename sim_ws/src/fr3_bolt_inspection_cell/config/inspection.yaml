@@ -43,7 +43,8 @@ joint_acceleration: 0.15
 # Relaxed for the near-singular vertical pick; logs report the actual maximum.
 joint_step_limit: 0.20
 inspection_center: [0.25, 0.0, 1.15]
-handover_center: [0.25, 0.0, 1.15]
+# Part centre: 10 cm farther forward and 15 cm below the inspection centre.
+handover_center: [0.35, 0.0, 1.00]
 # Each view is reached from neutral and returns to neutral. No accumulating wrist turns.
 views_deg: [[0, 0, 0], [0, 0, -30], [0, 15, 0], [0, -15, 0], [0, 35, 0], [0, -35, 0], [15, 0, 0], [-15, 0, 0], [60, 0, 0], [-60, 0, 0], [120, 0, 0], [-120, 0, 0], [180, 0, 0], [0, 0, 60], [0, 0, -60], [0, 0, 120], [0, 0, -120], [0, 0, 180]]
 minimum_views: 3

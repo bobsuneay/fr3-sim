@@ -206,7 +206,7 @@ def test_all_approach_candidates_fail_without_motion(adapter):
     io.action = MagicMock()
     with pytest.raises(module.PlanningFailure, match='exhausted 8'):
         io.global_move('right', target=np.eye(4), continuation=np.eye(4))
-    assert io.call.call_count == 8
+    assert io.call.call_count == 9
     io.action.assert_not_called()
     io.execute.assert_not_called()
 

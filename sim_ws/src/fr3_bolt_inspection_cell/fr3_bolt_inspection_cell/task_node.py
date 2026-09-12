@@ -23,7 +23,7 @@ from .core import (validate, estimate_bolt, grasp_in_object, centered_views,
 from .core import fingertip_table_pick_tcp, fingertip_world_min_z, perpendicular_receiver_grasp
 from .geometry import fingertip_points_tcp
 from .ros_io import IO, PlanningFailure, matrix
-from .handover import transfer
+from .handover import transfer, approach_receiver
 from .retry import prepare_pick_retry
 from .feedback import feedback_joint_name
 
@@ -639,11 +639,8 @@ class Inspection(Node):
         self.handover_context = None
         self.publish('HANDOVER_APPROACH', second+' approaching from the side with perpendicular jaws')
         self.io.allow_touch([second+'_left_finger', second+'_right_finger'])
-        target = handover@receiver_grasp
-        pre = target.copy()
-        pre[:3, 3] -= target[:3, 2]*self.cfg['approach_height']
-        self.io.global_move(second, pre)
-        self.io.cartesian(second, [target], self.cfg['descent_speed'])
+        receiver_grasp, target = approach_receiver(self.io, second, handover, receiver_grasp,
+            self.cfg['approach_height'], self.cfg['descent_speed'], self.get_logger().info)
         actual_tcp = self.io.tcp_pose(second)
         position_error = float(np.linalg.norm(actual_tcp[:3, 3]-target[:3, 3]))
         angle_error = float(Rotation.from_matrix(target[:3, :3].T@actual_tcp[:3, :3]).magnitude())

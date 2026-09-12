@@ -325,7 +325,7 @@ class IO:
             return result.planned_trajectory
         self.execute(result.planned_trajectory)
 
-    def pick_approach(self, side, above, grasp):
+    def pick_approach(self, side, above, grasp, plan_only=False):
         """Generate grasp IK first, propagate upward, then connect to that branch.
 
         A free pose goal above the part can land on a slightly tilted wrist
@@ -394,11 +394,23 @@ class IO:
                 self.n.get_logger().warning(f'Grasp candidate {attempt}/8 rejected: {failure}')
                 continue
             prepared = PreparedCartesian(side, at_above, downward, q, frames)
+            if plan_only:
+                return connection, prepared
             self.n.get_logger().info('Grasp-first plan selected: executing connection to verified pre-grasp')
             # An execution failure must propagate, never trigger another candidate.
             self.execute(connection)
             return prepared
-        raise PlanningFailure(f'Grasp-first planning exhausted 8 seeds: {failure}; no arm motion executed')
+        # Collision-disabled IK is diagnostic only and never executed.
+        request.ik_request.avoid_collisions = False
+        diagnostic = self.call(self.ik, request)
+        detail = f'diagnostic IK code={diagnostic.error_code.val}'
+        if diagnostic.error_code.val == 1:
+            try:
+                self.validate_robot_state(diagnostic.solution)
+                detail += '; diagnostic state valid, but continuous approach/connection not found'
+            except CartesianPlanningError as exc:
+                detail += '; '+str(exc)
+        raise PlanningFailure(f'Grasp-first planning exhausted 8 seeds: {failure}; {detail}; no arm motion executed')
 
     def validate_robot_state(self, robot_state):
         req = GetStateValidity.Request()

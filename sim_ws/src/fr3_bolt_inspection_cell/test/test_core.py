@@ -389,7 +389,7 @@ def test_receiver_and_donor_are_perpendicular_linked_rings(rotation):
     assert np.dot(b[:3, 3]-a[:3, 3], world[:3, 0]) == pytest.approx(.020)
 
 
-def test_default_pick_and_handover_have_valid_fk_witnesses():
+def test_reference_pick_and_legacy_handover_fk_witnesses():
     from copy import deepcopy
     from fr3_dual_bolt_cell.world import table_boxes
     sys.path.insert(0, str(BASE/'test'))
@@ -400,7 +400,9 @@ def test_default_pick_and_handover_have_valid_fk_witnesses():
     srdf = ET.fromstring(semantic(root, initial))
     allowed = {frozenset((e.get('link1'), e.get('link2'))) for e in srdf.findall('disable_collisions')}
     c = config()
-    center = c['handover_center']
+    # These saved joint witnesses describe the legacy opposed handover.
+    # Current perpendicular candidates are checked by MoveIt at runtime.
+    center = q['reference_handover_center']
     scenarios = [
         ({'right': q['pick_right']}, {'right': transform([.5, -.2, .7245])@grasp_in_object(-.006)}),
         ({'right': q['above_right']}, {'right': transform([.5, -.2, .7745])@grasp_in_object(-.006)}),
