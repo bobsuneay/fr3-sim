@@ -63,6 +63,7 @@ def test_gripper_commands_only_master_and_checks_follower(adapter, side):
 
 
 @pytest.mark.parametrize('positions,accepted', [([.00505, .00505], True),
+    ([.0034, .0034], True),
     ([.0175, .0175], False), ([.00505, .007], False)])
 def test_close_accepts_shaft_contact_but_not_still_open(adapter, positions, accepted):
     module, io = adapter

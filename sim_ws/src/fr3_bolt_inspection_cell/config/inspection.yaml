@@ -23,6 +23,8 @@ close_width: 0.004
 finger_max_force: 4.0
 finger_max_speed: 0.006
 approach_height: 0.05
+# Empty-grasp retries retreat locally, without homing either arm.
+retry_lift_height: 0.02
 # Before closing: measured TCP reach, then at most one complete correction.
 grasp_reach_tolerance: 0.001
 grasp_recovery_max: 0.025

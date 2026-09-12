@@ -46,7 +46,7 @@ def recovery():
     actual[2, 3] = .726
     io.tcp_pose.return_value = actual
     arms = {s: {'initial': [0]*6} for s in ('left', 'right')}
-    cfg = dict(open_width=.035, approach_height=.05, descent_speed=.008)
+    cfg = dict(open_width=.035, approach_height=.05, descent_speed=.008, retry_lift_height=.02)
     return io, arms, cfg, actual
 
 
@@ -70,18 +70,20 @@ def test_retry_rechecks_ownership_after_motion_stops(recovery):
 
 
 @pytest.mark.parametrize('side', ['left', 'right'])
-def test_retry_retreats_before_homing_and_preserves_target(recovery, side):
+def test_retry_lifts_locally_without_homing_or_moving_other_arm(recovery, side):
     io, arms, cfg, target = recovery
     original = target.copy()
     prepare_pick_retry(io, side, arms, cfg, target, MagicMock())
     method_names = [call[0] for call in io.mock_calls]
     assert method_names.index('wait_stationary') < method_names.index('gripper')
-    assert method_names.index('cartesian') < method_names.index('global_move')
+    assert method_names.index('gripper') < method_names.index('cartesian')
     above = io.cartesian.call_args.args[1][0]
-    assert above[2, 3] == pytest.approx(.776)
+    assert above[2, 3] == pytest.approx(.746)
+    assert np.allclose(above[:2, 3], original[:2, 3])
+    assert np.allclose(above[:3, :3], original[:3, :3])
     assert np.allclose(target, original)
-    assert io.global_move.call_args_list[0].args == (side,)
-    assert io.global_move.call_count == 2
+    io.global_move.assert_not_called()
+    io.gripper.assert_called_once_with(side, cfg['open_width'])
 
 
 def test_failed_retreat_does_not_try_homing(recovery):
@@ -89,6 +91,17 @@ def test_failed_retreat_does_not_try_homing(recovery):
     io.cartesian.side_effect = RuntimeError('Blocked retreat')
     with pytest.raises(RuntimeError, match='Blocked retreat'):
         prepare_pick_retry(io, 'right', arms, cfg, target, MagicMock())
+    io.global_move.assert_not_called()
+
+
+@pytest.mark.parametrize('old_z', [None, .60, 1.1])
+def test_local_retry_uses_measured_pose_not_old_pick_height(recovery, old_z):
+    io, arms, cfg, actual = recovery
+    target = None if old_z is None else np.eye(4)
+    if target is not None:
+        target[2, 3] = old_z
+    prepare_pick_retry(io, 'right', arms, cfg, target, MagicMock())
+    assert io.cartesian.call_args.args[1][0][2, 3] == pytest.approx(actual[2, 3]+.02)
     io.global_move.assert_not_called()
 
 
@@ -111,6 +124,7 @@ def task(monkeypatch):
     node.worker, node.output = None, Path('previous_run')
     node.report = {'events': [{'phase': 'FAILED', 'detail': 'old'}], 'views': ['old']}
     node.io, node.status_pub = MagicMock(), MagicMock()
+    node.io.grasp_owner.return_value = ''
     node.cloud, node.object_state = object(), object()
     node.get_logger = MagicMock()
     node.fingertips = {side: [dict(joint=f'{side}_{finger}_finger_joint',
@@ -280,7 +294,7 @@ def test_randomize_stop_before_worker_runs_does_not_move_object(task):
 
 def test_retry_runs_new_camera_and_detection_after_recovery(task, monkeypatch, tmp_path):
     module, node = task
-    node.cfg = dict(output_directory=str(tmp_path), first_arm='right')
+    node.cfg = dict(output_directory=str(tmp_path), first_arm='right', retry_lift_height=.02)
     node.arms, node.settle = {}, MagicMock()
     node.io.grasp_owner.return_value = ''
     calls = []
@@ -385,7 +399,7 @@ def test_failed_test_lift_keeps_safety_latch_until_cleanup(task):
     assert node.pick_secured
 
 
-def test_failed_pick_cleanup_releases_attachment_before_opening(task):
+def test_failed_pick_cleanup_preserves_acquired_object(task):
     _, node = task
     node.output = None
     node.cfg = dict(open_width=.035, approach_height=.05, descent_speed=.008)
@@ -396,10 +410,39 @@ def test_failed_pick_cleanup_releases_attachment_before_opening(task):
     node.pick_secured = True
     node.pick_target = None
     node.settle = MagicMock()
-    node.reset_failed_pick('right')
-    node.io.assisted_grasp.assert_called_once_with('right', False)
-    from fr3_bolt_inspection_cell.core import transform
-    assert np.allclose(node.io.object_scene.call_args.args[0],
-                       actual @ transform([0, 0, 0], [0, -np.pi/2, 0]))
-    assert node.io.object_scene.call_args.kwargs == {'previous': 'right'}
-    assert not node.pick_secured
+    with pytest.raises(RuntimeError, match='no automatic release'):
+        node.reset_failed_pick('right')
+    node.io.assisted_grasp.assert_not_called()
+    node.io.gripper.assert_not_called()
+    node.io.object_scene.assert_not_called()
+    assert node.pick_secured
+
+
+@pytest.mark.parametrize('owner,latch', [('right', True), ('right', False), ('', True)])
+def test_post_grasp_failure_never_enters_open_and_retry(task, owner, latch):
+    _, node = task
+    node.output = None
+    node.cfg = {'max_grasp_attempts': 5}
+    node.io.grasp_owner.return_value = owner
+    node.pick_secured = latch
+    node.pick_once = MagicMock(side_effect=RuntimeError('lift planning failed'))
+    node.reset_failed_pick = MagicMock()
+    with pytest.raises(RuntimeError, match='Grasp retained'):
+        node.acquire_initial_pick('right', 'left')
+    node.reset_failed_pick.assert_not_called()
+    assert node.pick_once.call_count == 1
+    assert node.pick_secured
+    assert node.report['pick_attempts'][-1]['status'] == 'holding_interrupted'
+
+
+def test_unknown_ownership_never_opens_jaws(task):
+    _, node = task
+    node.output = None
+    node.cfg = {'max_grasp_attempts': 5}
+    node.io.grasp_owner.side_effect = RuntimeError('service timeout')
+    node.pick_once = MagicMock(side_effect=RuntimeError('attach response timeout'))
+    node.reset_failed_pick = MagicMock()
+    with pytest.raises(RuntimeError, match='ownership unknown'):
+        node.acquire_initial_pick('right', 'left')
+    node.reset_failed_pick.assert_not_called()
+    assert node.pick_secured

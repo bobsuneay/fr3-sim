@@ -387,12 +387,11 @@ class Inspection(Node):
             raise RuntimeError(f'Only {completed} views reachable for {side}; requires {self.cfg["minimum_views"]}')
 
     def reset_failed_pick(self, first):
-        """Remove any partial simulated/planning attachment before retrying."""
+        """Retry an empty grasp only; never release an acquired part here."""
         owner = self.io.grasp_owner()
-        if owner not in ('', first):
-            raise RuntimeError(f'Cannot recover pick: {owner} unexpectedly owns the object')
-        if owner == first:
-            self.io.assisted_grasp(first, False)
+        if self.pick_secured or owner:
+            self.pick_secured = True
+            raise RuntimeError('Object acquired or ownership uncertain; retaining closed jaws, no automatic release')
         actual = self.io.truth()
         # Safe even when attachment was never applied: remove the named
         # attached object and replace its current world collision geometry.
@@ -442,10 +441,12 @@ class Inspection(Node):
         self.check_fingertip_clearance(first)
         self.publish('GRASP', f'Pick attempt {attempt}: close jaws and request assisted contact validation')
         self.io.gripper(first, self.cfg['close_width'])
+        self.publish('CHECK_CONTACT', 'Jaws closed; validate physical bolt contact before lifting')
         self.io.assisted_grasp(first)
         # Safety latch: ownership exists even though the test lift has not yet
         # proved a usable grasp. Automatic cleanup clears it after release.
         self.pick_secured = True
+        self.publish('GRASP_ACQUIRED', 'Contact accepted; retain closed jaws and prepare test lift')
         self.io.object_scene(obj, first)
         test_pose = obj.copy()
         test_pose[2, 3] += self.cfg['grasp_test_lift']
@@ -488,6 +489,23 @@ class Inspection(Node):
             except Exception as exc:
                 if self.stop_event.is_set():
                     raise
+                # An error after acquisition can be a scene/planning/execution
+                # failure. It is not proof of an empty grasp. Also query owner
+                # for a service timeout after the simulator attached the bolt.
+                try:
+                    owner = self.io.grasp_owner()
+                except Exception as ownership_error:
+                    self.pick_secured = True
+                    raise RuntimeError(f'Pick interrupted ({exc}); ownership unknown '
+                        f'({ownership_error}); retaining jaws closed') from exc
+                if self.pick_secured or owner:
+                    self.pick_secured = True
+                    failures.append({'attempt': attempt, 'status': 'holding_interrupted',
+                                     'reason': str(exc)})
+                    self.publish('HOLDING_INTERRUPTED',
+                        f'Grasp acquired; lift/verification interrupted: {exc}; jaws remain closed')
+                    raise RuntimeError(f'Grasp retained; lift/verification failed: {exc}; '
+                                       'no automatic release or regrasp') from exc
                 failures.append({'attempt': attempt, 'status': 'failed', 'reason': str(exc)})
                 self.publish('GRASP_RETRY',
                     f'Pick attempt {attempt}/{maximum} failed: {exc}; cleaning up for retry')
@@ -508,7 +526,8 @@ class Inspection(Node):
             if self.io.grasp_owner():
                 raise RuntimeError('A gripper already owns the object; retaining grasp, no retry motion')
             if retry:
-                self.publish('RETRY_CLEARANCE', 'Open empty jaws, retreat and return home before new detection')
+                self.publish('RETRY_CLEARANCE',
+                    f'Open empty jaws and lift locally {self.cfg["retry_lift_height"]*1000:.0f} mm before new detection')
                 prepare_pick_retry(self.io, self.cfg['first_arm'], self.arms, self.cfg,
                                    self.pick_target, self.settle)
             self.capture('camera_check')

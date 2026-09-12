@@ -637,14 +637,18 @@ class IO:
             f'joint_targets=({width/2:.4f}, {width/2:.4f}), '
             f'measured=({measured[0]:.4f}, {measured[1]:.4f})')
         # HKV inward pads protrude 1.05 mm beyond each slider zero.
-        # Shaft contact stops each slider at radius + that protrusion.
+        # Full-radius contact is only an upper bound: near the bottom of a
+        # round shaft, contact can occur at a smaller opening. Physical
+        # bilateral contact is checked by assisted_grasp, not inferred here.
         contact_q = self.c['shaft_radius'] + .00105
         contact_stop = (abs(width-self.c['close_width']) < 1e-8 and
-                        all(abs(v-contact_q) <= .0015 for v in measured))
+                        all(width/2-.0015 <= v <= contact_q+.0015 for v in measured))
         if max(abs(v-width/2) for v in measured) > .0015 and not contact_stop:
             raise RuntimeError('Gripper position feedback did not reach target')
         if abs(measured[0]-measured[1]) > .001:
             raise RuntimeError('Linked gripper fingers differ by more than 1 mm')
+        if contact_stop:
+            self.n.get_logger().info('Close opening accepted provisionally; require bilateral bolt contact before lift')
 
     def grasp_owner(self):
         response = self.call(self.owner, Trigger.Request())
