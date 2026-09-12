@@ -632,10 +632,14 @@ class IO:
         joint_speed = self.c.get('scan_joint_speed', self.c['joint_speed']) if scanning else self.c['joint_speed']
         acceleration = (self.c.get('scan_joint_acceleration', self.c['joint_acceleration'])
                         if scanning else self.c['joint_acceleration'])
+        scale = float(self.n.scan_speed_scale) if scanning else 1.0
+        speed *= scale
+        joint_speed *= scale
+        acceleration *= scale*scale
         times = segment_times(q, [t[:3, 3] for t in frames], speed, joint_speed, acceleration)
         if scanning:
             self.n.get_logger().info(
-                f'Inspection rotation timing: duration={times[-1]:.2f} s simulation time, '
+                f'Inspection rotation timing: scale={scale:.2f}x, duration={times[-1]:.2f} s simulation time, '
                 f'TCP speed={speed:.3f} m/s, joint speed={joint_speed:.3f} rad/s, '
                 f'joint acceleration={acceleration:.3f} rad/s^2')
         for point, seconds in zip(trajectory.joint_trajectory.points, times):
@@ -667,19 +671,17 @@ class IO:
             f'Gripper settled: side={side}, requested_gap={width:.4f} m, '
             f'joint_targets=({width/2:.4f}, {width/2:.4f}), '
             f'measured=({measured[0]:.4f}, {measured[1]:.4f})')
-        # HKV inward pads protrude 1.05 mm beyond each slider zero.
-        # Full-radius contact is only an upper bound: near the bottom of a
-        # round shaft, contact can occur at a smaller opening. Physical
-        # bilateral contact is checked by assisted_grasp, not inferred here.
-        contact_q = self.c['shaft_radius'] + .00105
-        contact_stop = (abs(width-self.c['close_width']) < 1e-8 and
-                        all(width/2-.0015 <= v <= contact_q+.0015 for v in measured))
-        if max(abs(v-width/2) for v in measured) > .0015 and not contact_stop:
-            raise RuntimeError('Gripper position feedback did not reach target')
-        if abs(measured[0]-measured[1]) > .001:
+        closing = abs(width-self.c['close_width']) < 1e-8
+        if not np.all(np.isfinite(measured)) or min(measured) < -.0015:
+            raise RuntimeError('Invalid physical finger feedback')
+        if abs(master-follower) > .001:
             raise RuntimeError('Linked gripper fingers differ by more than 1 mm')
-        if contact_stop:
-            self.n.get_logger().info('Close opening accepted provisionally; require bilateral bolt contact before lift')
+        if not closing and max(abs(v-width/2) for v in measured) > .0015:
+            raise RuntimeError('Gripper opening did not reach target')
+        if closing:
+            self.n.get_logger().info(
+                f'Closure command complete: measured_gap={(master+follower)*1000:.2f} mm; '
+                'width is diagnostic only, grasp UNCONFIRMED until sustained bilateral contact and follow test')
 
     def grasp_owner(self):
         response = self.call(self.owner, Trigger.Request())

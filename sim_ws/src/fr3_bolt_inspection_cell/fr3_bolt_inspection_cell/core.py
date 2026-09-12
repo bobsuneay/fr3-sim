@@ -191,6 +191,14 @@ def grasp_in_object(offset, below=False):
     return result
 
 
+def perpendicular_receiver_grasp(offset, donor_grasp):
+    """Turn the receiver 90 degrees around the part axis, like linked rings."""
+    result = np.eye(4)
+    result[:3, :3] = Rotation.from_euler('x', np.pi/2).as_matrix()@donor_grasp[:3, :3]
+    result[:3, 3] = [offset, 0, 0]
+    return result
+
+
 def table_pick_tcp(object_pose, axial_offset, depth_offset):
     """Place the TCP slightly below an uncertain perceived shaft centre."""
     result = np.asarray(object_pose, dtype=float)@grasp_in_object(axial_offset)

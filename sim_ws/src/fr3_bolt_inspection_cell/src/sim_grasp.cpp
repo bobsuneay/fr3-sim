@@ -38,7 +38,6 @@ class AssistedGrasp : public gazebo::WorldPlugin {
   std::condition_variable cv_;
   std::shared_ptr<Pending> pending_;
   std::string robot_, object_, owner_;
-  double length_, shaft_radius_, head_length_;
 
  public:
   void Load(gazebo::physics::WorldPtr world, sdf::ElementPtr sdf) override {
@@ -47,11 +46,6 @@ class AssistedGrasp : public gazebo::WorldPlugin {
     node_ = gazebo_ros::Node::Get(sdf);
     robot_ = sdf->Get<std::string>("robot_model");
     object_ = sdf->Get<std::string>("object_model");
-    length_ = sdf->Get<double>("bolt_length");
-    shaft_radius_ = sdf->Get<double>("shaft_radius");
-    head_length_ = sdf->Get<double>("head_length");
-    if (!(length_ > head_length_ && head_length_ > 0 && shaft_radius_ > 0))
-      throw std::runtime_error("Invalid assisted grasp bolt dimensions");
     fingers_ = node_->create_publisher<sensor_msgs::msg::JointState>("gripper_states", 10);
     for (size_t i = 0; i < 2; ++i) {
       const std::string side = i == 0 ? "left" : "right";
@@ -77,7 +71,7 @@ class AssistedGrasp : public gazebo::WorldPlugin {
     update_ = gazebo::event::Events::ConnectWorldUpdateBegin(
       [this](const gazebo::common::UpdateInfo &) { Update(); });
     contact_update_ = gazebo::event::Events::ConnectWorldUpdateEnd([this]() { SampleContacts(); });
-    RCLCPP_WARN(node_->get_logger(), "ASSISTED SIMULATION GRASP: bilateral contact + geometry gate + fixed joint; not a friction validation");
+    RCLCPP_WARN(node_->get_logger(), "ASSISTED SIMULATION GRASP: sustained bilateral contact + synchronized fingers + fixed joint; not a friction validation");
   }
 
  private:
@@ -135,28 +129,14 @@ class AssistedGrasp : public gazebo::WorldPlugin {
     if (!state.name.empty()) fingers_->publish(state);
   }
 
-  bool ReceiverReady(const std::string & side, gazebo::physics::ModelPtr robot,
-                     gazebo::physics::LinkPtr bolt, gazebo::physics::LinkPtr palm) {
-    const auto rel = palm->WorldPose().Inverse() * bolt->WorldPose();
-    const auto axis = rel.Rot().RotateVector(ignition::math::Vector3d::UnitZ);
-    // Bolt axis must run along local palm Y; both jaws surround shaft, not head.
-    if (std::abs(axis.Y()) < .97) return false;
-    const double t = -rel.Pos().Y()/axis.Y();
-    if (t < -length_/2+.0035 || t > length_/2-head_length_-.0015) return false;
-    const auto point = rel.Pos()+axis*t;
-    // Original HKV mesh tip is palm Z=.1467 m.
-    // Require the configured shaft to overlap the physical tip region.
-    if (std::abs(point.Z()-.1467) > shaft_radius_ || std::abs(point.X()) > .0018) return false;
+  bool FingerFeedbackReady(const std::string & side, gazebo::physics::ModelPtr robot) {
+    // Size-independent gate. Actual bilateral part contact is checked separately.
     auto left = robot->GetJoint(side+"_left_finger_joint");
     auto right = robot->GetJoint(side+"_right_finger_joint");
     if (!left || !right) return false;
     const double a = left->Position(0), b = right->Position(0);
-    // Contact can stop the sliders before the 2 mm commanded position.
-    // Inner pad gap = a+b-2.1 mm; allow 1.5 mm contact tolerance per jaw.
-    const double contact_limit = shaft_radius_+.00105+.0015;
-    return a >= 0 && b >= 0 && a <= contact_limit && b <= contact_limit &&
-           std::abs(a-b) <= .001 &&
-           std::abs((b-a)/2-point.X()) < .0018;
+    return std::isfinite(a) && std::isfinite(b) && a >= 0 && b >= 0 &&
+           std::abs(a-b) <= .001;
   }
   void Update() {
     PublishFingers();
@@ -174,12 +154,13 @@ class AssistedGrasp : public gazebo::WorldPlugin {
         const size_t index = p->side == "left" ? 0 : 1;
         const double now = world_->SimTime().Double();
         const auto &contact = contacts_[index].seen;
-        RCLCPP_INFO(node_->get_logger(), "Grasp check %s: finger contact age=(%.3f, %.3f) s",
-          p->side.c_str(), now-contact[0], now-contact[1]);
+        RCLCPP_INFO(node_->get_logger(), "Grasp check %s: finger contact age=(%.3f, %.3f) s, duration=(%.3f, %.3f) s",
+          p->side.c_str(), now-contact[0], now-contact[1],
+          contact[0]-contacts_[index].since[0], contact[1]-contacts_[index].since[1]);
         if (!contacts_[index].ready(now))
-          throw std::runtime_error("Missing recent bolt contact on BOTH fingers; no attachment (check alignment/collision)");
-        if (!ReceiverReady(p->side, robot, bolt, palm))
-          throw std::runtime_error("Jaws do not enclose the expected shaft region");
+          throw std::runtime_error("Require >=100 ms sustained contact on BOTH fingers with part; no attachment");
+        if (!FingerFeedbackReady(p->side, robot))
+          throw std::runtime_error("Invalid or unsynchronized physical finger feedback");
         if (owner_ != p->side) {
           auto next = world_->Physics()->CreateJoint("fixed", robot);
           if (!next) throw std::runtime_error("Cannot create assisted grasp joint");

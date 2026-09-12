@@ -375,6 +375,20 @@ def test_world_has_one_bolt_and_explicit_assistance():
         assert float(cylinder.find('radius').text) == cfg[part+'_radius']
 
 
+@pytest.mark.parametrize('rotation', [[0, 0, 0], [.3, -.4, 1.2]])
+def test_receiver_and_donor_are_perpendicular_linked_rings(rotation):
+    from fr3_bolt_inspection_cell.core import perpendicular_receiver_grasp
+    donor = grasp_in_object(-.010)
+    receiver = perpendicular_receiver_grasp(.010, donor)
+    world = transform([.25, 0, 1.1], rotation)
+    a, b = world@donor, world@receiver
+    # X is finger closing direction; Z is approach. Both are perpendicular.
+    assert abs(a[:3, 0]@b[:3, 0]) < 1e-12
+    assert abs(a[:3, 2]@b[:3, 2]) < 1e-12
+    assert np.linalg.det(b[:3, :3]) == pytest.approx(1)
+    assert np.dot(b[:3, 3]-a[:3, 3], world[:3, 0]) == pytest.approx(.020)
+
+
 def test_default_pick_and_handover_have_valid_fk_witnesses():
     from copy import deepcopy
     from fr3_dual_bolt_cell.world import table_boxes
@@ -422,7 +436,7 @@ def test_all_python_parses():
         ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
 
 
-@pytest.mark.parametrize('fail_stage', ['close', 'grasp', 'scene', 'settle', 'verify', None])
+@pytest.mark.parametrize('fail_stage', ['close', 'grasp', 'scene', 'settle', 'verify', 'owner', None])
 def test_handover_never_opens_donor_before_confirmation(fail_stage):
     from fr3_bolt_inspection_cell.handover import transfer
     events = []
@@ -437,6 +451,9 @@ def test_handover_never_opens_donor_before_confirmation(fail_stage):
             event('grasp')
         def object_scene(self, *args, **kwargs):
             event('scene')
+        def grasp_owner(self):
+            event('owner')
+            return 'left'
     def run():
         transfer(FakeIO(), 'right', 'left', np.eye(4), .004, .035,
                  lambda: event('settle'), lambda obj: event('verify'))
@@ -446,4 +463,4 @@ def test_handover_never_opens_donor_before_confirmation(fail_stage):
         assert 'open_donor' not in events
     else:
         run()
-        assert events == ['close', 'grasp', 'scene', 'settle', 'verify', 'open_donor']
+        assert events == ['close', 'grasp', 'scene', 'settle', 'verify', 'owner', 'open_donor']

@@ -123,6 +123,7 @@ def task(monkeypatch):
     node.phase, node.pick_secured, node.pick_target = 'FAILED', False, np.eye(4)
     node.handover_context = None
     node.handover_requested = threading.Event()
+    node.scan_speed_scale = 1.0
     node.worker, node.output = None, Path('previous_run')
     node.report = {'events': [{'phase': 'FAILED', 'detail': 'old'}], 'views': ['old']}
     node.io, node.status_pub = MagicMock(), MagicMock()
@@ -147,6 +148,16 @@ def task(monkeypatch):
 
 def response():
     return NS(success=False, message='')
+
+
+@pytest.mark.parametrize('scale,expected', [(.25, .25), (1.5, 1.5), (2., 2.),
+    (0, 1.), (-1., 1.), (2.01, 1.), (float('nan'), 1.), (float('inf'), 1.)])
+def test_scan_slider_bounds_and_status_readback(task, scale, expected):
+    _, node = task
+    node.set_scan_speed(NS(data=scale))
+    assert node.scan_speed_scale == expected
+    assert json.loads(node.status(None, response()).message)['scan_speed_scale'] == expected
+    node.io.cancel.assert_not_called()
 
 
 def test_handover_during_scan_queues_without_parallel_motion(task):
@@ -192,6 +203,38 @@ def test_skip_scan_bypasses_minimum_views_without_any_motion(task):
     node.handover_requested.set()
     node.scan('right', np.eye(4), np.eye(4))
     node.io.cartesian.assert_not_called()
+
+
+@pytest.mark.parametrize('follow_ok', [False, True])
+def test_handover_requires_receiver_motion_follow_before_scan(task, monkeypatch, follow_ok):
+    module, node = task
+    node.publish = MagicMock()
+    node.report = {'views': []}
+    node.cfg = dict(handover_center=[.25, 0, 1.1], approach_height=.05,
+                    descent_speed=.008, transfer_speed=.02, close_width=.004, open_width=.035)
+    node.arms = {'right': {'initial': [0]*6}}
+    node.object_truth = np.eye(4)
+    node.io.truth.return_value = np.eye(4)
+    node.io.grasp_owner.side_effect = ['right', 'left']
+    target = np.eye(4)
+    target[:3, 3] = node.cfg['handover_center']
+    node.io.tcp_pose.return_value = target.copy()
+    node.settle, node.scan = MagicMock(), MagicMock()
+    monkeypatch.setattr(module, 'transfer', MagicMock())
+    node.verify = MagicMock(side_effect=[0, 0 if follow_ok else RuntimeError('part did not follow')])
+    if follow_ok:
+        node.finish_handover('right', 'left', target, np.eye(4), np.eye(4))
+        node.scan.assert_called_once()
+    else:
+        with pytest.raises(RuntimeError, match='did not follow'):
+            node.finish_handover('right', 'left', target, np.eye(4), np.eye(4))
+        node.scan.assert_not_called()
+    probe = node.verify.call_args.args[0]
+    assert probe[2, 3] == pytest.approx(1.11)
+    calls = node.io.mock_calls
+    home = next(i for i, call in enumerate(calls) if call[0] == 'global_move' and 'joints' in call.kwargs)
+    assert calls[home+1][0] == 'cartesian'
+    assert calls[home+1].args[0] == 'left'
 
 
 def test_humble_mimic_feedback_preserves_measured_values_and_age(task):
@@ -405,7 +448,8 @@ def test_pick_is_confirmed_only_after_object_follows_test_lift(task):
     node.cfg = dict(max_grasp_attempts=5, grasp_offset=.01, grasp_depth_offset=.002,
                     open_width=.035, close_width=.004, approach_height=.05,
                     descent_speed=.008, grasp_test_lift=.015,
-                    table_z=.720, fingertip_table_clearance=.005)
+                    table_z=.720, fingertip_table_clearance=.005,
+                    bolt_length=.045, head_length=.008, head_radius=.009)
     obj = np.eye(4)
     obj[:3, 3] = [.5, -.2, .724]
     node.perceive = MagicMock(return_value=NS(pose=obj))
@@ -433,7 +477,8 @@ def test_failed_test_lift_keeps_safety_latch_until_cleanup(task):
     node.cfg = dict(max_grasp_attempts=5, grasp_offset=.01, grasp_depth_offset=.002,
                     open_width=.035, close_width=.004, approach_height=.05,
                     descent_speed=.008, grasp_test_lift=.015,
-                    table_z=.720, fingertip_table_clearance=.005)
+                    table_z=.720, fingertip_table_clearance=.005,
+                    bolt_length=.045, head_length=.008, head_radius=.009)
     obj = np.eye(4)
     obj[:3, 3] = [.5, -.2, .724]
     node.perceive = MagicMock(return_value=NS(pose=obj))

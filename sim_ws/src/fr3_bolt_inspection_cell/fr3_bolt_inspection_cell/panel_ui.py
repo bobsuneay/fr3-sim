@@ -5,7 +5,7 @@ from .feedback import arm_rows, gripper_text
 
 
 class InspectionPanel:
-    def __init__(self, root, cameras, request):
+    def __init__(self, root, cameras, request, set_speed=None):
         root.title('FR3 双臂螺丝检测 · Gazebo')
         root.geometry('980x860')
         root.minsize(900, 780)
@@ -27,6 +27,26 @@ class InspectionPanel:
         self.selected = tk.StringVar(value=cameras[0])
         ttk.Combobox(bar, textvariable=self.selected, values=cameras,
                      state='readonly', width=18).pack(side='right')
+        speed_bar = ttk.Frame(root)
+        speed_bar.pack(fill='x', padx=22, pady=(8, 0))
+        ttk.Label(speed_bar, text='展示旋转速度').pack(side='left')
+        self.speed_value = tk.DoubleVar(value=1.0)
+        self.speed_label = tk.StringVar(value='设定 1.00× · 等待任务反馈')
+        self.speed_timer = None
+        self.speed_initialized = False
+        def changed(value):
+            self.speed_label.set(f'设定 {float(value):.2f}× · 等待确认（下一段生效）')
+            if self.speed_timer is not None:
+                root.after_cancel(self.speed_timer)
+            def send():
+                self.speed_timer = None
+                if set_speed is not None:
+                    set_speed(round(self.speed_value.get(), 2))
+            self.speed_timer = root.after(250, send)
+        self.speed_slider = ttk.Scale(speed_bar, from_=.25, to=2.0,
+            variable=self.speed_value, command=changed, length=250, state='disabled')
+        self.speed_slider.pack(side='left', padx=10)
+        ttk.Label(speed_bar, textvariable=self.speed_label).pack(side='left')
         self.status = tk.StringVar(value='等待任务状态；启动需要 enable_execution:=true')
         ttk.Label(root, textvariable=self.status, wraplength=920, justify='left').pack(fill='x', padx=22, pady=(10, 4))
         self.response = tk.StringVar(value='夹取失败后可重试；重新定位并夹取，成功后继续检测流程。')
@@ -60,6 +80,17 @@ class InspectionPanel:
             self.grippers[side].set(gripper_text(side, joints, owner))
 
     def controls(self, state, pending=False):
+        confirmed = state.get('scan_speed_scale')
+        self.speed_slider.configure(state='normal' if confirmed is not None else 'disabled')
+        if confirmed is not None:
+            if not self.speed_initialized:
+                self.speed_value.set(confirmed)
+                self.speed_initialized = True
+            if self.speed_timer is None:
+                self.speed_label.set(
+                    f'设定 {self.speed_value.get():.2f}× · 任务已接收 {confirmed:.2f}×（下一段生效）')
+        else:
+            self.speed_label.set('等待任务状态连接')
         self.handover.configure(state='normal' if state.get('can_handover') and not pending else 'disabled')
         self.start.configure(state='normal' if state.get('can_start') and not pending else 'disabled')
         self.retry.configure(state='normal' if state.get('can_retry') and not pending else 'disabled')

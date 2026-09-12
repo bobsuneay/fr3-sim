@@ -34,10 +34,12 @@ int main() {
   contacts.sample(1, {.0001, -1});
   check(!contacts.ready(1));
   contacts.sample(1.01, {.0002,.0003});
-  check(contacts.ready(1.02));
+  check(!contacts.ready(1.02));
+  for (int i=2; i<=13; ++i) contacts.sample(1+i*.01, {.0002,.0003});
+  check(contacts.ready(1.14));
   check(!contacts.ready(1.3));
-  contacts.sample(1.03, {.004,.0001});
-  check(!contacts.ready(1.03));
+  contacts.sample(1.14, {.004,.0001});
+  check(!contacts.ready(1.14));
   contacts.sample(.1, {-1,-1});
   check(!contacts.ready(.1));
   std::cout << "Linked finger servo tests passed\n";

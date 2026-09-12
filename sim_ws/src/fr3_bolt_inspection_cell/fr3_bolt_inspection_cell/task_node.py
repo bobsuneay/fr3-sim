@@ -14,13 +14,13 @@ from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CameraInfo, Image, JointState, PointCloud2
 from sensor_msgs_py import point_cloud2
 from gazebo_msgs.msg import ModelStates
-from std_msgs.msg import String
+from std_msgs.msg import String, Float64
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 import yaml
 from .core import (validate, estimate_bolt, grasp_in_object, centered_views,
                    interpolate_object, random_disk_xy, transform)
-from .core import fingertip_table_pick_tcp, fingertip_world_min_z
+from .core import fingertip_table_pick_tcp, fingertip_world_min_z, perpendicular_receiver_grasp
 from .geometry import fingertip_points_tcp
 from .ros_io import IO, PlanningFailure, matrix
 from .handover import transfer
@@ -56,6 +56,8 @@ class Inspection(Node):
         self.pick_target = None
         self.handover_context = None
         self.handover_requested = threading.Event()
+        self.scan_speed_scale = 1.0
+        self.create_subscription(Float64, '/inspection/scan_speed_scale', self.set_scan_speed, 10)
         self.report = {'backend': 'gazebo_assisted', 'events': [], 'views': []}
         self.output = None
         self.tf_buffer = Buffer()
@@ -94,6 +96,15 @@ class Inspection(Node):
         with self.data_lock:
             self.joints.update({feedback_joint_name(n): (q, time.monotonic())
                                 for n, q in zip(msg.name, msg.position)})
+
+    def set_scan_speed(self, msg):
+        value = float(msg.data)
+        if not np.isfinite(value) or not .25 <= value <= 2.0:
+            self.get_logger().warning('Rejected scan speed scale: require 0.25 to 2.0')
+            return
+        self.scan_speed_scale = value
+        self.get_logger().info(
+            f'Inspection speed scale={value:.2f}x; applies to next rotation segment, current motion unchanged')
 
     def on_cloud(self, msg):
         with self.data_lock:
@@ -262,6 +273,7 @@ class Inspection(Node):
             enabled = (self.get_parameter('mode').value == 'gazebo'
                        and self.get_parameter('enable_execution').value)
             event.update(busy=busy, can_start=bool(enabled and not busy and self.phase == 'IDLE'),
+                         scan_speed_scale=self.scan_speed_scale,
                          can_handover=bool(self.can_handover()),
                          can_retry=bool(enabled and not busy and not self.pick_secured
                                         and self.phase in ('FAILED', 'STOPPED')),
@@ -462,7 +474,6 @@ class Inspection(Node):
         target = fingertip_table_pick_tcp(
             obj, -self.cfg['grasp_offset'], self.cfg['table_z'],
             self.cfg['fingertip_table_clearance'], tip_points)
-        receiver_grasp = grasp_in_object(self.cfg['grasp_offset'], below=True)
         self.report['estimated_pose'] = obj.tolist()
         self.object_truth = np.linalg.inv(obj)@self.io.truth()
         if np.linalg.norm(self.object_truth[:3, 3]) > .004:
@@ -476,6 +487,8 @@ class Inspection(Node):
         above = target.copy()
         above[2, 3] += self.cfg['approach_height']
         donor_grasp = np.linalg.inv(obj)@target
+        receiver_grasp = perpendicular_receiver_grasp(self.cfg['grasp_offset'], donor_grasp)
+        self.get_logger().info('Handover geometry: receiver rotated 90 degrees around part axis; perpendicular jaw closing axes')
         self.pick_target = target.copy()
         self.get_logger().info(
             f'APPROACH poses: above=({above[0, 3]:.4f}, {above[1, 3]:.4f}, '
@@ -624,13 +637,21 @@ class Inspection(Node):
         self.verify(handover)
         # Once receiver approach starts, this shortcut must not repeat a transfer.
         self.handover_context = None
-        self.publish('HANDOVER_APPROACH', second+' approaching the free shaft region from below')
+        self.publish('HANDOVER_APPROACH', second+' approaching from the side with perpendicular jaws')
         self.io.allow_touch([second+'_left_finger', second+'_right_finger'])
         target = handover@receiver_grasp
         pre = target.copy()
         pre[:3, 3] -= target[:3, 2]*self.cfg['approach_height']
         self.io.global_move(second, pre)
         self.io.cartesian(second, [target], self.cfg['descent_speed'])
+        actual_tcp = self.io.tcp_pose(second)
+        position_error = float(np.linalg.norm(actual_tcp[:3, 3]-target[:3, 3]))
+        angle_error = float(Rotation.from_matrix(target[:3, :3].T@actual_tcp[:3, :3]).magnitude())
+        self.get_logger().info(
+            f'Receiver reach check: position_error={position_error*1000:.3f} mm, '
+            f'angle_error={angle_error:.5f} rad, shaft_offset={receiver_grasp[0, 3]*1000:.2f} mm')
+        if position_error > .001 or angle_error > .02:
+            raise RuntimeError('Receiver TCP has not reached shaft grasp; donor retains object')
         self.publish('HANDOVER_CONFIRM', 'Validate receiver before opening donor')
         transfer(self.io, first, second, handover, self.cfg['close_width'],
                  self.cfg['open_width'], self.settle, self.verify)
@@ -639,6 +660,15 @@ class Inspection(Node):
         self.io.cartesian(first, [retreat], self.cfg['transfer_speed'])
         self.io.allow_touch([first+'_left_finger', first+'_right_finger'], False)
         self.io.global_move(first, joints=self.arms[first]['initial'])
+        self.publish('HANDOVER_FOLLOW_TEST', 'Receiver moves part 10 mm; verify pose tracking before inspection')
+        probe = handover.copy()
+        probe[2, 3] += .010
+        self.io.cartesian(second, [probe@receiver_grasp], self.cfg['descent_speed'])
+        self.settle()
+        self.verify(probe)
+        if self.io.grasp_owner() != second:
+            raise RuntimeError('Receiver ownership lost during follow test')
+        self.publish('HANDOVER_CONFIRMED', 'Receiver passed motion follow test')
         self.io.cartesian(second, [neutral@receiver_grasp], self.cfg['transfer_speed'])
         self.scan(second, neutral, receiver_grasp)
         skipped = sum(v['status'] == 'unreachable' for v in self.report['views'])

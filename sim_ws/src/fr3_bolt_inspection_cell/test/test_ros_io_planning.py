@@ -29,6 +29,7 @@ def adapter(monkeypatch):
     module.Duration = NS
     io = module.IO.__new__(module.IO)
     io.n = MagicMock()
+    io.n.scan_speed_scale = 1.0
     io.c = dict(joint_speed=.12, joint_acceleration=.15, cartesian_step=.003,
                 joint_step_limit=.2, center_tolerance=.003, angular_tolerance=.12,
                 grasp_reach_tolerance=.003, grasp_recovery_max=.025,
@@ -64,8 +65,9 @@ def test_gripper_commands_only_master_and_checks_follower(adapter, side):
 
 @pytest.mark.parametrize('positions,accepted', [([.00505, .00505], True),
     ([.0034, .0034], True),
-    ([.0175, .0175], False), ([.00505, .007], False)])
-def test_close_accepts_shaft_contact_but_not_still_open(adapter, positions, accepted):
+    ([.0175, .0175], True), ([.00958, .00964], True),
+    ([float('nan'), .007], False), ([.00505, .007], False)])
+def test_close_width_is_not_grasp_confirmation(adapter, positions, accepted):
     module, io = adapter
     module.FollowJointTrajectory.Goal = lambda: NS(trajectory=NS())
     io.fingers = {'right': object()}
@@ -74,6 +76,7 @@ def test_close_accepts_shaft_contact_but_not_still_open(adapter, positions, acce
         'right_right_finger_joint'], position=positions))
     if accepted:
         io.gripper('right', .004)
+        assert 'UNCONFIRMED' in io.n.get_logger().info.call_args.args[0]
     else:
         with pytest.raises(RuntimeError):
             io.gripper('right', .004)
@@ -102,6 +105,24 @@ def test_scan_speed_changes_only_centered_rotation(adapter):
         start = t.joint_trajectory.points[0].time_from_start
         return value.sec + value.nanosec*1e-9 - start.sec - start.nanosec*1e-9
     assert seconds(scan) == pytest.approx(seconds(normal)/2, abs=1e-8)
+
+
+def test_live_slider_retimes_only_next_scan_not_existing_or_descent(adapter):
+    _, io = adapter
+    q = np.array([[0.0], [.1]])
+    frames = [np.eye(4)]*2
+    before, after, descent = trajectory(), trajectory(), trajectory()
+    io.run_cartesian_trajectory(before, q, frames, .03, np.eye(4), np.zeros(3))
+    def span(t):
+        a, b = [p.time_from_start for p in t.joint_trajectory.points]
+        return b.sec-a.sec+(b.nanosec-a.nanosec)*1e-9
+    original = span(before)
+    io.n.scan_speed_scale = 2.0
+    io.run_cartesian_trajectory(after, q, frames, .03, np.eye(4), np.zeros(3))
+    io.run_cartesian_trajectory(descent, q, frames, .03)
+    assert span(before) == original
+    assert span(after) == pytest.approx(original/2, abs=1e-8)
+    assert span(descent) == original
 
 
 def test_fallback_failure_never_executes_partial_path(adapter):

@@ -10,7 +10,7 @@ from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import String
+from std_msgs.msg import String, Float64
 from std_srvs.srv import Trigger
 from .feedback import JointFeedback
 from .panel_ui import InspectionPanel
@@ -19,6 +19,7 @@ from .panel_ui import InspectionPanel
 def main():
     rclpy.init()
     node = Node('inspection_panel')
+    speed_pub = node.create_publisher(Float64, '/inspection/scan_speed_scale', 10)
     messages = queue.Queue(maxsize=20)
     lock = threading.Lock()
     frames, feedback = {}, JointFeedback()
@@ -126,7 +127,9 @@ def main():
     thread = threading.Thread(target=spin, daemon=True)
     thread.start()
     root = tk.Tk()
-    ui = InspectionPanel(root, cameras, request)
+    def set_speed(value):
+        speed_pub.publish(Float64(data=value))
+    ui = InspectionPanel(root, cameras, request, set_speed)
     last, last_poll = None, -1.
 
     def update():
