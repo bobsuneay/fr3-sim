@@ -741,7 +741,10 @@ class IO:
         diff.is_diff = True
         diff.robot_state.is_diff = True
         if not self.call(self.apply, ApplyPlanningScene.Request(scene=diff)).success:
-            raise RuntimeError('Planning scene update failed')
+            world = [(o.id, o.operation) for o in diff.world.collision_objects]
+            attached = [(a.object.id, a.link_name, a.object.operation)
+                        for a in diff.robot_state.attached_collision_objects]
+            raise RuntimeError(f'Planning scene update failed: world={world}, attached={attached}')
 
     def allow_touch(self, links, allowed=True):
         req = GetPlanningScene.Request()
@@ -786,8 +789,27 @@ class IO:
             attachment = AttachedCollisionObject(link_name=side+'_gripper_tcp', object=obj)
             attachment.touch_links = [side+'_'+f+'_finger' for f in ('left', 'right')]
             diff.robot_state.attached_collision_objects.append(attachment)
-            removed = CollisionObject(id=obj.id, operation=CollisionObject.REMOVE)
-            diff.world.collision_objects.append(removed)
+            # Humble applies robot-state attachments before world updates.
+            # Attached ADD already removes the world copy. A second world
+            # REMOVE fails even though the attachment has been installed.
         else:
             diff.world.collision_objects.append(obj)
         self.scene_diff(diff)
+        self.verify_object_placement(side)
+
+    def verify_object_placement(self, side):
+        """Confirm the collision object is in exactly one scene location."""
+        request = GetPlanningScene.Request()
+        request.components.components = (PlanningSceneComponents.WORLD_OBJECT_NAMES |
+                                          PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS)
+        scene = self.call(self.scene, request).scene
+        world = [obj for obj in scene.world.collision_objects if obj.id == 'inspection_bolt']
+        attached = [a for a in scene.robot_state.attached_collision_objects
+                    if a.object.id == 'inspection_bolt']
+        links = [a.link_name for a in attached]
+        valid = (not world and links == [side+'_gripper_tcp']) if side else (len(world) == 1 and not attached)
+        if not valid:
+            raise RuntimeError(f'Planning scene object placement mismatch: expected={side or "world"}, '
+                               f'world_copies={len(world)}, attached_links={links}; no motion sent')
+        self.n.get_logger().info(
+            f'Planning scene object confirmed: inspection_bolt -> {side+"_gripper_tcp" if side else "world"}')

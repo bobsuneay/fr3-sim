@@ -454,3 +454,114 @@ def test_entity_service_fallback_and_missing_services(adapter):
     fallback.wait_for_service.return_value = False
     with pytest.raises(RuntimeError, match='/inspection/sim/set_entity_state'):
         io._available_service((primary, fallback))
+
+
+@pytest.fixture
+def object_scene_adapter(adapter, monkeypatch):
+    """Model Humble's attachment-before-world processing and automatic removal.
+
+    This regression transport is not an actual MoveIt integration test.
+    Message factories use real lists to expose duplicate operations hidden by mocks.
+    """
+    from copy import deepcopy
+    module, io = adapter
+
+    class Collision(NS):
+        ADD, REMOVE = 0, 1
+        def __init__(self, id='', operation=0):
+            super().__init__(id=id, operation=operation, header=NS(frame_id=''),
+                             primitives=[], primitive_poses=[])
+
+    def attached(link_name='', object=None):
+        return NS(link_name=link_name, object=object or Collision(), touch_links=[])
+
+    def scene():
+        return NS(is_diff=False, robot_state=NS(is_diff=False, attached_collision_objects=[]),
+                  world=NS(collision_objects=[]))
+
+    monkeypatch.setattr(module, 'CollisionObject', Collision)
+    monkeypatch.setattr(module, 'AttachedCollisionObject', attached)
+    monkeypatch.setattr(module, 'PlanningScene', scene)
+    monkeypatch.setattr(module, 'Pose', lambda: NS(position=NS(), orientation=NS()))
+    monkeypatch.setattr(module, 'SolidPrimitive', type('Primitive', (NS,), {'CYLINDER': 3}))
+    monkeypatch.setattr(module, 'PlanningSceneComponents',
+                        NS(WORLD_OBJECT_NAMES=8, ROBOT_STATE_ATTACHED_OBJECTS=4))
+    monkeypatch.setattr(module, 'ApplyPlanningScene', NS(Request=NS))
+    monkeypatch.setattr(module, 'GetPlanningScene', NS(Request=lambda: NS(components=NS(components=0))))
+    io.c.update(bolt_length=.045, head_length=.008, shaft_radius=.006, head_radius=.009)
+    io.apply, io.scene = object(), object()
+    backend = NS(world={}, attached={}, updates=[], read_requests=[], corrupt=False)
+
+    def call(client, request):
+        if client is io.scene:
+            backend.read_requests.append(request)
+            result = scene()
+            result.world.collision_objects = list(backend.world.values())
+            if not backend.corrupt:
+                result.robot_state.attached_collision_objects = list(backend.attached.values())
+            return NS(scene=deepcopy(result))
+        assert client is io.apply
+        diff = request.scene
+        assert diff.is_diff and diff.robot_state.is_diff
+        backend.updates.append(deepcopy(diff))
+        for item in diff.robot_state.attached_collision_objects:
+            if item.object.operation == Collision.ADD:
+                backend.world.pop(item.object.id, None)
+                backend.attached[item.object.id] = deepcopy(item)
+            else:
+                old = backend.attached.pop(item.object.id, None)
+                if old:
+                    backend.world[item.object.id] = old.object
+        success = True
+        for obj in diff.world.collision_objects:
+            if obj.operation == Collision.REMOVE:
+                success = (backend.world.pop(obj.id, None) is not None) and success
+            else:
+                backend.world[obj.id] = deepcopy(obj)
+        return NS(success=success)
+
+    io.call = call
+    return module, io, backend
+
+
+def test_attach_repeat_handover_and_detach_keep_one_object(object_scene_adapter):
+    module, io, backend = object_scene_adapter
+    target = np.eye(4)
+    target[:3, 3] = [.5, -.2, .729]
+    io.object_scene(target)
+    assert list(backend.world) == ['inspection_bolt'] and not backend.attached
+    io.object_scene(target, 'right')
+    assert not backend.world
+    attached = backend.attached['inspection_bolt']
+    assert attached.link_name == 'right_gripper_tcp'
+    assert len(attached.object.primitives) == 2
+    assert attached.object.primitives[0].dimensions == pytest.approx([.037, .006])
+    assert attached.touch_links == ['right_left_finger', 'right_right_finger']
+    assert module.matrix(attached.object.primitive_poses[0])[:3, 3] == pytest.approx([.496, -.2, .729])
+    io.object_scene(target, 'right')  # Retry after a previous partial scene update.
+    io.object_scene(target, 'left', previous='right')
+    assert not backend.world
+    assert backend.attached['inspection_bolt'].link_name == 'left_gripper_tcp'
+    io.object_scene(target, previous='left')
+    assert not backend.attached and list(backend.world) == ['inspection_bolt']
+    assert len(backend.read_requests) == 5
+
+
+def test_old_duplicate_remove_reproduces_logged_failure(object_scene_adapter):
+    module, io, backend = object_scene_adapter
+    io.object_scene(np.eye(4))
+    io.object_scene(np.eye(4), 'right')
+    diff = backend.updates[-1]
+    diff.world.collision_objects.append(module.CollisionObject(
+        id='inspection_bolt', operation=module.CollisionObject.REMOVE))
+    with pytest.raises(RuntimeError, match='Planning scene update failed'):
+        io.scene_diff(diff)
+    assert backend.attached['inspection_bolt'].link_name == 'right_gripper_tcp'
+
+
+def test_scene_success_without_attachment_is_not_accepted(object_scene_adapter):
+    _, io, backend = object_scene_adapter
+    backend.corrupt = True
+    with pytest.raises(RuntimeError, match='placement mismatch'):
+        io.object_scene(np.eye(4), 'right')
+    io.execute.assert_not_called()

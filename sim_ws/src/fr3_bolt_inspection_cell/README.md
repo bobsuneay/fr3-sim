@@ -43,6 +43,8 @@ Gazebo 夹爪使用本包 `ContactSystem` 硬件插件：机械臂仍由原 Gaze
 
 闭合开度校验允许圆杆下缘的接触开度小于完整杆径对应的开度；这仅允许继续检查实际接触，不直接宣布抓取成功。流程为 `CHECK_CONTACT` → `GRASP_ACQUIRED` → `VERIFY_GRASP`（试抬 15 mm）→ `GRASP_CONFIRMED` → 继续抬升与检测。一旦已获得夹持，附着场景更新、试抬规划、执行或验证失败都保持闭合，并记录 `HOLDING_INTERRUPTED` 和具体错误。只有尚未取得夹持且确认无持有者时才自动清理重试；所有权查询超时也不会自动松爪。保持夹持的失败状态下不允许“重新夹取”或随机移动零件。
 
+若旧版本在 `GRASP_ACQUIRED` 后出现 `Tried to remove world object 'inspection_bolt', but it does not exist`，原因是场景消息重复删除：MoveIt Humble 先处理机器人附着，附着过程已自动移除世界中的同名零件，再执行显式世界删除就会返回失败。当前版本只提交包含几何的附着操作，并读回场景确认零件只存在于预期夹爪下，随后才进入试抬；真实的场景服务错误仍会中止并保留夹持。这个顺序见 [MoveIt Humble PlanningScene 源码](https://github.com/moveit/moveit2/blob/humble/moveit_core/planning_scene/src/planning_scene.cpp)。
+
 更新此修复后必须重新编译 C++ 插件并完全退出旧 Gazebo 再启动：`colcon build --packages-select fr3_bolt_inspection_cell --symlink-install`，然后 `source install/setup.bash`。确认启动日志出现 `CONTACT GRIPPER: one target per pair`；否则新硬件插件没有加载。可用 `colcon test --packages-select fr3_bolt_inspection_cell` 运行包含驱动力上限、联动与接触证据的测试。还需在 Gazebo 实测空夹、桌上双指接触、试抬、交接和停止；当前 Windows 离线测试没有覆盖完整 ROS/Gazebo 插件加载。
 
 本包保留原始 HKV 夹爪的视觉外形，但采用与 `fr3_dual_bolt_cell` 一致的稳定简化碰撞代理：法兰、主体、滑轨和手指滑块使用盒体，只有左右两根手指末端保留 `finger.stl` 形状碰撞。这样既保留真实指尖夹持轮廓，也避免完整 CAD 网格在法兰安装处产生数值抖动。演示螺丝已放大为总长 **45 mm**、杆径 **12 mm**、头部直径 **18 mm**、头长 **8 mm**。点云筛选和辅助夹持校验读取配置尺寸，质量与惯量由场景生成器重算；指尖离桌面仍为 5 mm。实际两手夹持的可达性和夹持空间仍需在仿真中重新确认。
